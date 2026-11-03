@@ -1,0 +1,20 @@
+{
+  "name": "swapio-trading-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "once": "tsx src/index.ts --once",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@solana/web3.js": "1.98.4",
+    "tsx": "4.20.6"
+  },
+  "devDependencies": {
+    "@types/node": "22.18.12",
+    "typescript": "5.9.3"
+  }
+}
