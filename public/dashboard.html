@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Dashboard</title>
+<style>
+  :root { --bg:#0a0a0a; --panel:#131313; --panel2:#181818; --line:#262626; --gold:#d4af37; --gold2:#f0d77a; --txt:#f2f2f2; --mut:#8c8c8c; --red:#d0725f; --green:#7fbf7f; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--txt); font: 15px/1.45 Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 24px 16px 60px; }
+  header { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; flex-wrap: wrap; margin-bottom: 18px; }
+  h1 { margin: 0; font-size: 28px; letter-spacing: -.01em; } h1 span { color: var(--gold); }
+  .muted { color: var(--mut); } .small { font-size: 13px; }
+  .grid { display: grid; gap: 14px; }
+  .g2 { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+  .g4 { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px; }
+  .card h2 { margin: 0 0 10px; font-size: 16px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .section { margin-top: 22px; } .section > h3 { margin: 0 0 10px; font-size: 13px; text-transform: uppercase; letter-spacing: .12em; color: var(--gold); }
+  .pill { font-size: 12px; font-weight: 700; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--line); color: var(--mut); text-transform: uppercase; letter-spacing: .06em; white-space: nowrap; }
+  .pill.on { color: var(--gold); border-color: rgba(212,175,55,.6); } .pill.live { color: #111; background: var(--gold); border-color: var(--gold); } .pill.off { color: var(--red); border-color: rgba(208,114,95,.5); }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 10px 0; flex-wrap: wrap; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .seg button, .btn { background: var(--panel2); color: var(--txt); border: 0; padding: 8px 14px; font: inherit; font-weight: 600; cursor: pointer; }
+  .seg button + button { border-left: 1px solid var(--line); }
+  .seg button.active { background: var(--gold); color: #111; }
+  .seg button:disabled, .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .btn { border: 1px solid var(--line); border-radius: 10px; } .btn.gold { background: var(--gold); color: #111; border-color: var(--gold); }
+  input[type=text] { background: #0e0e0e; border: 1px solid var(--line); color: var(--txt); border-radius: 10px; padding: 8px 10px; font: inherit; width: 130px; }
+  .warn { color: var(--gold2); font-size: 13px; } .err { color: var(--red); font-size: 13px; }
+  .stat .v { font-size: 24px; font-weight: 800; font-variant-numeric: tabular-nums; } .stat .k { font-size: 12px; color: var(--mut); text-transform: uppercase; letter-spacing: .08em; }
+  .pos { color: var(--green); } .neg { color: var(--red); }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th { text-align: left; color: var(--mut); font-size: 12px; text-transform: uppercase; letter-spacing: .07em; font-weight: 600; padding: 8px; border-bottom: 1px solid var(--line); }
+  td { padding: 9px 8px; border-bottom: 1px solid var(--line); vertical-align: top; font-variant-numeric: tabular-nums; }
+  tr:last-child td { border-bottom: 0; }
+  .scroll { overflow-x: auto; }
+  .tweet { border-bottom: 1px solid var(--line); padding: 10px 0; } .tweet:last-child { border-bottom: 0; }
+  .tweet .t { white-space: pre-wrap; margin: 6px 0; }
+  .log { font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--mut); max-height: 320px; overflow: auto; white-space: pre-wrap; word-break: break-word; }
+  .log b { color: var(--txt); font-weight: 600; }
+  svg { width: 100%; height: 220px; display: block; }
+  .legend { display: flex; gap: 14px; font-size: 13px; color: var(--mut); flex-wrap: wrap; } .legend i { display: inline-block; width: 12px; height: 3px; vertical-align: middle; margin-right: 6px; }
+  .banner { background: rgba(208,114,95,.12); border: 1px solid rgba(208,114,95,.5); color: var(--red); padding: 10px 14px; border-radius: 12px; margin-bottom: 14px; display: none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1 id="title">Agent <span>Dashboard</span></h1>
+      <div class="muted small" id="sub">Loading…</div>
+    </div>
+    <div class="muted small" id="updated"></div>
+  </header>
+
+  <div class="banner" id="killBanner">KILL_SWITCH is on in Railway. No swaps will run until it is set back to off.</div>
+
+  <div class="grid g2" id="controls"></div>
+  <div class="muted small" id="controlNote" style="margin-top:8px"></div>
+
+  <div class="section">
+    <div class="row" style="margin:0 0 10px">
+      <h3 style="margin:0;font-size:13px;text-transform:uppercase;letter-spacing:.12em;color:var(--gold)">Portfolio</h3>
+      <div class="seg" id="viewSeg"><button data-v="paper">Paper ledger</button><button data-v="live">Live ledger</button></div>
+    </div>
+    <div class="grid g4" id="stats"></div>
+  </div>
+
+  <div class="section card">
+    <h2>Value vs holding <span class="legend"><span><i style="background:var(--gold)"></i>Agent</span><span><i style="background:#9a9a9a"></i>Hold BTC</span><span><i style="background:#555"></i>Hold SOL</span></span></h2>
+    <div id="chart"></div>
+  </div>
+
+  <div class="section"><h3>Positions</h3><div class="card scroll" id="positions"></div></div>
+  <div class="section"><h3>Latest analysis</h3><div class="card" id="analysis"></div></div>
+
+  <div class="grid g2 section">
+    <div><h3 style="margin:0 0 10px;font-size:13px;text-transform:uppercase;letter-spacing:.12em;color:var(--gold)">Trades</h3><div class="card scroll" id="trades"></div></div>
+    <div><h3 style="margin:0 0 10px;font-size:13px;text-transform:uppercase;letter-spacing:.12em;color:var(--gold)">Tweets</h3><div class="card" id="tweets"></div></div>
+  </div>
+
+  <div class="section"><h3>Activity</h3><div class="card"><div class="log" id="log"></div></div></div>
+</div>
+
+<script>
+var S = null, view = null, pendingLive = null, lastError = "";
+function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
+function money(v) { return v == null ? "–" : "$" + Number(v).toLocaleString(undefined, { maximumFractionDigits: 2, minimumFractionDigits: 2 }); }
+function pct(v) { if (v == null) return "–"; var n = Number(v); return '<span class="' + (n >= 0 ? "pos" : "neg") + '">' + (n >= 0 ? "+" : "") + n.toFixed(2) + "%</span>"; }
+function px(v) { return v == null ? "–" : "$" + Number(v).toLocaleString(undefined, { maximumFractionDigits: v < 10 ? 4 : 2 }); }
+function ago(t) { if (!t) return "never"; var m = Math.round((Date.now() - Date.parse(t)) / 60000); return m < 1 ? "just now" : m < 60 ? m + " min ago" : m < 1440 ? Math.round(m / 60) + " h ago" : Math.round(m / 1440) + " d ago"; }
+
+async function load() {
+  try {
+    var r = await fetch("/api/status", { cache: "no-store" });
+    S = await r.json();
+    if (!view) view = S.controls.trader.mode;
+    render();
+  } catch (e) { document.getElementById("sub").textContent = "Could not load status: " + e.message; }
+}
+
+async function setCtl(patch) {
+  lastError = "";
+  try {
+    var r = await fetch("/api/controls", { method: "POST", headers: { "content-type": "application/json", "x-dashboard": "1" }, body: JSON.stringify(patch) });
+    var j = await r.json();
+    if (!r.ok) lastError = j.error || "failed";
+  } catch (e) { lastError = e.message; }
+  pendingLive = null;
+  await load();
+}
+
+function controlCard(key, title, desc, modes) {
+  var c = S.controls[key], live = c.mode === "live", pre = key === "trader" ? S.prerequisites.liveTrading : S.prerequisites.liveTweets;
+  var dis = S.canControl ? "" : " disabled";
+  var h = '<div class="card"><h2>' + title + ' <span class="pill ' + (c.enabled ? (live ? "live" : "on") : "off") + '">' + (c.enabled ? (live ? "Live" : modes[0][1]) : "Off") + "</span></h2>";
+  h += '<div class="muted small">' + desc + "</div>";
+  h += '<div class="row"><span>Agent</span><div class="seg"><button class="' + (c.enabled ? "active" : "") + '" onclick="setCtl({' + key + ':{enabled:true}})"' + dis + '>On</button><button class="' + (!c.enabled ? "active" : "") + '" onclick="setCtl({' + key + ':{enabled:false}})"' + dis + ">Off</button></div></div>";
+  h += '<div class="row"><span>Mode</span><div class="seg">';
+  h += '<button class="' + (!live ? "active" : "") + '" onclick="setCtl({' + key + ":{mode:'" + modes[0][0] + "'}})\"" + dis + ">" + modes[0][1] + "</button>";
+  h += '<button class="' + (live ? "active" : "") + '" onclick="askLive(\'' + key + "')\"" + (S.canControl && pre.ok ? "" : " disabled") + ">Live</button></div></div>";
+  if (pendingLive === key) h += '<div class="row"><span class="warn">' + (key === "trader" ? "Real money. " : "Posts publicly on X. ") + 'Type LIVE to confirm</span><span><input type="text" id="confirm_' + key + '" autocomplete="off"> <button class="btn gold" onclick="confirmLive(\'' + key + "')\">Confirm</button> <button class=\"btn\" onclick=\"pendingLive=null;render()\">Cancel</button></span></div>";
+  if (!pre.ok) h += '<div class="warn">Live is locked. Missing in Railway: ' + esc(pre.missing.join(", ")) + "</div>";
+  return h + "</div>";
+}
+function askLive(k) { pendingLive = k; render(); var i = document.getElementById("confirm_" + k); if (i) i.focus(); }
+function confirmLive(k) { var i = document.getElementById("confirm_" + k); if (!i || i.value.trim() !== "LIVE") { lastError = "Type LIVE exactly to confirm"; render(); return; } var p = {}; p[k] = { mode: "live" }; setCtl(p); }
+
+function legName(id) { var s = S.sleeves.filter(function (x) { return x.id === id; })[0]; return s ? String(s.label).split(" (")[0] : id; }
+function nextTrigger(sig, posn) {
+  if (!sig || sig.rule == null) return '<span class="muted">Waiting for the first daily close</span>';
+  if (sig.rule === "dip") {
+    if (posn && posn.inPosition) return "Sells on a close above " + px(sig.sma5) + " (5-day average)";
+    if (!sig.aboveSma200) return "Paused: BTC is below its 200-day average (" + px(sig.sma200) + ")";
+    return "Buys when RSI(2) drops under 10 (now " + sig.rsi2 + ")";
+  }
+  if (sig.rule === "donchian20_10") {
+    if (posn && posn.inPosition) return "Sells on a close below " + px(sig.low10) + " (" + Number(sig.toSellTriggerPct).toFixed(1) + "% away)";
+    return "Buys on a close above " + px(sig.high20) + " (+" + Number(sig.toBuyTriggerPct).toFixed(1) + "% away)";
+  }
+  if (sig.rule === "sma50") return (posn && posn.inPosition ? "Sells on a close below " : "Buys on a close above ") + px(sig.sma50) + " (50-day average)";
+  return "–";
+}
+
+function chart(eq) {
+  if (!eq || eq.length < 2) return '<div class="muted small" style="padding:30px 0;text-align:center">The chart starts after two daily closes.</div>';
+  var a = eq.map(function (e) { return e.value / eq[0].value; }), b = eq.map(function (e) { return e.btc / eq[0].btc; }), s = eq.map(function (e) { return e.sol / eq[0].sol; });
+  var all = a.concat(b, s), lo = Math.min.apply(null, all), hi = Math.max.apply(null, all); if (hi - lo < 0.02) { hi += 0.01; lo -= 0.01; }
+  var W = 1000, H = 220, P = 10;
+  function line(v, col, w) { return '<polyline fill="none" stroke="' + col + '" stroke-width="' + w + '" points="' + v.map(function (y, i) { return (P + i * (W - 2 * P) / (v.length - 1)).toFixed(1) + "," + (H - P - (y - lo) / (hi - lo) * (H - 2 * P)).toFixed(1); }).join(" ") + '"/>'; }
+  var base = H - P - (1 - lo) / (hi - lo) * (H - 2 * P);
+  return '<svg viewBox="0 0 ' + W + " " + H + '" preserveAspectRatio="none"><line x1="0" x2="' + W + '" y1="' + base + '" y2="' + base + '" stroke="#2a2a2a" stroke-dasharray="4 4"/>' + line(s, "#555", 2) + line(b, "#9a9a9a", 2) + line(a, "#d4af37", 3) + "</svg>" +
+    '<div class="muted small">' + esc(eq[0].date) + " to " + esc(eq[eq.length - 1].date) + "</div>";
+}
+
+function render() {
+  var c = S.controls;
+  document.getElementById("title").innerHTML = esc(S.agentName) + " <span>Dashboard</span>";
+  document.getElementById("sub").textContent = "Strategy: " + S.sleeves.map(function (s) { return Math.round(s.weight * 100) + "% " + String(s.label).split(" (")[0]; }).join(" + ");
+  document.getElementById("updated").textContent = "Refreshed " + new Date(S.serverTime).toLocaleTimeString();
+  document.getElementById("killBanner").style.display = S.killSwitch ? "block" : "none";
+
+  document.getElementById("controls").innerHTML =
+    controlCard("trader", "Trading agent", "Follows the backtested rules once a day after the 00:00 UTC close. Paper = simulated money. Live = the real wallet.", [["paper", "Paper"]]) +
+    controlCard("tweeter", "Tweeting agent", "Turns each trade and the daily read into a post. Drafts = written and checked, never posted. Live = posts on X.", [["dry", "Drafts"]]);
+  document.getElementById("controlNote").innerHTML = (lastError ? '<span class="err">' + esc(lastError) + "</span> " : "") +
+    (S.canControl ? "Switching the trading mode keeps paper and live in separate ledgers. Turning tweets off skips new posts instead of queueing them." : '<span class="warn">Controls are disabled. Set DASHBOARD_PASSWORD in Railway Variables to turn them on.</span>');
+
+  Array.prototype.forEach.call(document.querySelectorAll("#viewSeg button"), function (b) {
+    b.className = b.dataset.v === view ? "active" : ""; b.onclick = function () { view = b.dataset.v; render(); };
+    b.disabled = !S.ledgers[b.dataset.v];
+  });
+  var L = S.ledgers[view] || S.ledgers[c.trader.mode], snap = L && L.snapshot;
+  if (!snap) {
+    document.getElementById("stats").innerHTML = '<div class="card muted">No data yet for this ledger. The trading agent fills it on its first run.</div>';
+    ["positions", "analysis", "trades"].forEach(function (id) { document.getElementById(id).innerHTML = '<span class="muted">–</span>'; });
+    document.getElementById("chart").innerHTML = chart(null);
+  } else {
+    var st = [["Value", money(snap.portfolioUsd)], ["Since start", pct(snap.changeSinceStartPct)], ["Hold BTC", pct(snap.holdingBtcSinceStartPct)], ["Hold SOL", pct(snap.holdingSolSinceStartPct)],
+      ["Max drawdown", pct(snap.maxDrawdownPct)], ["Win rate", snap.winRatePct == null ? "–" : snap.winRatePct.toFixed(0) + "%"], ["Closed trades", snap.closedTrades], ["Yield earned", money(snap.yieldEarnedUsd)]];
+    document.getElementById("stats").innerHTML = st.map(function (x) { return '<div class="card stat"><div class="k">' + x[0] + '</div><div class="v">' + x[1] + "</div></div>"; }).join("");
+    var rows = Object.keys(snap.positions).map(function (id) {
+      var p = snap.positions[id], sig = (L.signals || {})[id];
+      var nm = String(p.label).split(" (");
+      return "<tr><td><b>" + esc(nm[0]) + "</b>" + (nm[1] ? '<div class="muted small">' + esc(nm[1].replace(/\)$/, "")) + "</div>" : "") + "</td><td>" + (p.inPosition ? '<span class="pill on">In ' + esc(p.asset) + "</span>" : '<span class="pill">In USDC</span>') + "</td><td>" + money(p.valueUsd) + "</td><td>" + (p.inPosition ? px(p.entryPrice) : "–") + "</td><td>" + (p.openPnlPct == null ? "–" : pct(p.openPnlPct)) + "</td><td>" + nextTrigger(sig, p) + "</td></tr>";
+    }).join("");
+    document.getElementById("positions").innerHTML = "<table><tr><th>Leg</th><th>Status</th><th>Value</th><th>Entry</th><th>Open P&amp;L</th><th>Next trigger</th></tr>" + rows + "</table>" +
+      '<div class="muted small" style="margin-top:8px">USDC lent: ' + money(snap.usdcLent) + " (" + esc(snap.lending) + ") · last daily run: " + esc(L.lastProcessedDay || "not yet") + " · refreshed " + ago(snap.time) + "</div>";
+    document.getElementById("analysis").innerHTML = L.lastAnalysis ? "<b>" + esc(L.lastAnalysis.headline) + '</b><div class="muted" style="margin-top:6px">' + esc(L.lastAnalysis.reasoning) + '</div><div class="muted small" style="margin-top:6px">' + esc(L.lastAnalysis.date) + "</div>" : '<span class="muted">Written after the first daily close.</span>';
+    document.getElementById("trades").innerHTML = L.trades.length ? "<table><tr><th>When</th><th>Leg</th><th>Side</th><th>Price</th><th>Result</th></tr>" + L.trades.map(function (t) {
+      return "<tr><td>" + esc(t.time.slice(0, 16).replace("T", " ")) + "</td><td>" + esc(legName(t.sleeve)) + "</td><td>" + esc(t.side) + " " + esc(t.asset) + "</td><td>" + px(t.price) + "</td><td>" + (t.pnlPct == null ? "–" : pct(t.pnlPct)) + "</td></tr>";
+    }).join("") + "</table>" : '<span class="muted">No trades yet. Most days the rules say hold.</span>';
+    document.getElementById("chart").innerHTML = chart(L.equity);
+  }
+
+  var badge = { posted: "live", draft: "on", blocked: "off", error: "off", skipped: "", expired: "", pending: "on" };
+  document.getElementById("tweets").innerHTML = S.posts.length ? S.posts.map(function (p) {
+    return '<div class="tweet"><span class="pill ' + (badge[p.status] || "") + '">' + esc(p.status) + '</span> <span class="muted small">' + esc(p.kind) + " · " + ago(p.time) + (p.mode ? " · " + esc(p.mode) + " trading" : "") + "</span>" +
+      (p.final ? '<div class="t">' + esc(p.final) + "</div>" : "") + (p.reason ? '<div class="muted small">' + esc(p.reason) + "</div>" : "") + "</div>";
+  }).join("") : '<span class="muted">No posts yet.</span>';
+
+  document.getElementById("log").innerHTML = S.log.map(function (l) { return esc(l.time.slice(5, 16).replace("T", " ")) + "  <b>" + esc(l.event) + "</b>  " + esc(JSON.stringify(l.data)).slice(0, 220); }).join("\n");
+}
+
+load(); setInterval(function () { if (!pendingLive) load(); }, 30000);
+</script>
+</body>
+</html>
