@@ -2,7 +2,7 @@ import { CONFIG } from "./config.js";
 import { loadState, saveState, log, addEvent, type State, type Trade } from "./store.js";
 import { getMarket, getBalances, portfolioValue, type Market } from "./market.js";
 import { getDailyCloses, evaluate, type Signal } from "./signals.js";
-import { accrue, lentBalance, deposit, withdraw } from "./lending.js";
+import { accrue, lentBalance, deposit, withdraw, currentApy } from "./lending.js";
 import { explain } from "./agents/analyst.js";
 import { reviewTrade } from "./agents/reviewer.js";
 import { checkTrade } from "./guard.js";
@@ -48,6 +48,7 @@ export async function traderCycle() {
 
 async function dailyRun(state: State, market: Market, candles: Record<string, { close: number }[]>, dayKey: string) {
   const executed: { trade: Trade; label: string }[] = [];
+  const lendMoves: { action: "deposit" | "withdraw"; amountUsd: number; reason: string }[] = [];
 
   for (const sl of CONFIG.sleeves) {
     const st = state.sleeves[sl.id];
@@ -60,7 +61,11 @@ async function dailyRun(state: State, market: Market, candles: Record<string, { 
     let from = "USDC", to = sl.asset, amountIn = st.usdc;
     if (wantIn) {
       const short = amountIn - balances.USDC;
-      if (short > 0) { await withdraw(state, short + 0.01); balances = await getBalances(state); }
+      if (short > 0) {
+        const moved = await withdraw(state, short + 0.01);
+        if (moved > 0) lendMoves.push({ action: "withdraw", amountUsd: round2(moved), reason: `to buy ${sl.asset}` });
+        balances = await getBalances(state);
+      }
       amountIn = Math.min(amountIn, balances.USDC);
     } else {
       from = sl.asset; to = "USDC";
@@ -90,16 +95,30 @@ async function dailyRun(state: State, market: Market, candles: Record<string, { 
 
   // Lend idle USDC, keeping a cash buffer so a buy never waits on a withdrawal
   const bal = await getBalances(state);
-  if (bal.USDC > CONFIG.lending.cashBufferUsd + 1) await deposit(state, bal.USDC - CONFIG.lending.cashBufferUsd);
+  if (bal.USDC > CONFIG.lending.cashBufferUsd + 1) {
+    const moved = await deposit(state, bal.USDC - CONFIG.lending.cashBufferUsd);
+    if (moved > 0) lendMoves.push({ action: "deposit", amountUsd: round2(moved), reason: executed.length ? "parking the proceeds of today's sale" : "idle USDC" });
+  }
+  // Rate changes on the lending pool
+  const apy = await currentApy();
+  const rateChange = apy !== null && state.lastLendApy != null && Math.abs(apy - state.lastLendApy) >= CONFIG.lending.apyChangeAlert
+    ? { fromPct: round2(state.lastLendApy * 100), toPct: round2(apy * 100) } : null;
+  if (apy !== null) state.lastLendApy = apy;
 
   const facts = await snapshot(state, market, candles);
   state.equity.push({ date: dayKey, value: facts.portfolioUsd, btc: candles.BTCUSDT.at(-1)!.close, sol: candles.SOLUSDT.at(-1)!.close });
 
   // Hand over to the tweeting agent
+  const lending = { moves: lendMoves, usdcLent: facts.usdcLent, apyPct: apy === null ? null : round2(apy * 100), protocol: CONFIG.lending.protocol, rateChange };
   for (const e of executed) {
-    const f = { ...facts, trade: { ...e.trade, rule: e.label, txLink: CONFIG.includeTxLink && rt.tradeMode === "live" ? `https://solscan.io/tx/${e.trade.txSig}` : undefined } };
+    if (CONFIG.tradePosts === "open" && e.trade.side !== "buy") continue;
+    const f = { ...facts, lending, trade: { ...e.trade, rule: e.label, txLink: CONFIG.includeTxLink && rt.tradeMode === "live" ? `https://solscan.io/tx/${e.trade.txSig}` : undefined } };
     addEvent("trade", { ...f, analyst: await explain(f) });
   }
+  // Lending changes not tied to a trade get their own post (moves tied to a trade go in that trade's post)
+  const bigMoves = lendMoves.filter((m) => m.amountUsd >= CONFIG.lending.postMinUsd);
+  if ((!executed.length && bigMoves.length) || rateChange) addEvent("lend", { ...facts, lending });
+
   const analysis = await explain(facts);
   state.lastAnalysis = { ...analysis, date: dayKey };
   addEvent("daily", { ...facts, analyst: analysis, weekly: new Date().getUTCDay() === 1 });

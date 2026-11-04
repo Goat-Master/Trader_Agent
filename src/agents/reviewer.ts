@@ -16,11 +16,11 @@ Return {"approved":true|false,"reason":"<one sentence>"}`,
 
 export type TweetVerdict = { approved: boolean; reason: string; fixedTweet?: string };
 
-export async function reviewTweet(tweet: string, facts: object): Promise<TweetVerdict> {
+export async function reviewTweet(tweet: string, facts: object, kind = "trade"): Promise<TweetVerdict> {
   return askJson<TweetVerdict>(
     CONFIG.models.reviewer,
     `You are the editor for ${CONFIG.agentName}'s X account. Check a draft tweet against the facts.
-Reject or fix if: any number does not match the facts, it promises or implies future returns, it gives financial advice or tells people to buy, it shills a token, it mentions an airdrop or token for Swap.io, it is over 280 characters, it uses more than one hashtag, or it is cringe.
+${kind === "edu" ? "This is an educational post: general trading concepts are allowed, but they must be accurate. Any number about the agent itself must match the facts. " : ""}Reject or fix if: any number does not match the facts, it promises or implies future returns, it gives financial advice or tells people to buy, it shills a token, it mentions an airdrop or token for Swap.io, it is over 280 characters, it uses more than one hashtag, or it is cringe.
 If it only needs a small fix, set approved true and put the corrected text in fixedTweet.
 Return {"approved":true|false,"reason":"<one sentence>","fixedTweet":"<optional>"}`,
     `Facts:\n${JSON.stringify(facts, null, 1)}\n\nDraft tweet:\n${tweet}`

@@ -37,6 +37,7 @@ export type State = {
   equity: { date: string; value: number; btc: number; sol: number }[];
   lastSnapshot: Record<string, any> | null;
   lastAnalysis: { headline: string; reasoning: string; date: string } | null;
+  lastLendApy?: number | null;
 };
 
 // Paper and live keep separate ledgers, so switching modes never mixes simulated and real money.
@@ -72,7 +73,7 @@ export function saveState(s: State) {
 export type OutboxEvent = {
   id: string;
   time: string;
-  kind: "trade" | "daily";
+  kind: "trade" | "daily" | "edu" | "lend";
   facts: Record<string, any>;
   status: "pending" | "draft" | "posted" | "blocked" | "skipped" | "expired" | "error";
   draft?: string;

@@ -62,12 +62,17 @@ export const CONFIG = {
     mode: env("LEND_MODE", "paper") as "off" | "paper" | "live",
     paperApy: num("LEND_PAPER_APY", 0.04),
     cashBufferUsd: num("CASH_BUFFER_USD", 25), // always kept unlent so a buy never waits on a withdrawal
+    protocol: env("LEND_PROTOCOL", "Kamino"),
+    postMinUsd: num("LEND_POST_MIN_USD", 25), // lending moves at or above this get posted
+    apyChangeAlert: num("LEND_APY_CHANGE_ALERT", 0.01), // post when the rate moves by this much (0.01 = 1 point)
   },
 
   dataDir: env("DATA_DIR", "./data"),
   dashboardPassword: env("DASHBOARD_PASSWORD", ""),
   port: num("PORT", 3000),
   tweeterIntervalMinutes: num("TWEETER_INTERVAL_MINUTES", 5),
+  eduPostHourUtc: num("EDU_POST_HOUR_UTC", 14), // daily educational post (14:00 UTC = afternoon EU, morning US)
+  tradePosts: env("TRADE_POSTS", "all") as "open" | "all", // all = post when a trade opens and when it closes, open = opens only
   anthropicKey: env("ANTHROPIC_API_KEY", ""),
   solanaRpc: env("SOLANA_RPC_URL", "https://api.mainnet-beta.solana.com"),
   walletAddress: env("WALLET_ADDRESS", ""),

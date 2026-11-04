@@ -1,6 +1,8 @@
-import { loadOutbox, saveOutbox, log } from "./store.js";
+import { loadOutbox, saveOutbox, addEvent, loadState, stateExists, log } from "./store.js";
+import { CONFIG } from "./config.js";
 import { loadControls } from "./runtime.js";
-import { writeTradePost, writeDailyRead } from "./agents/poster.js";
+import { writeTradePost, writeDailyRead, writeEduPost, writeLendPost } from "./agents/poster.js";
+import { EDU_TOPICS } from "./topics.js";
 import { reviewTweet } from "./agents/reviewer.js";
 import { postTweet } from "./x.js";
 
@@ -12,6 +14,7 @@ const MAX_PER_RUN = 3;
 
 export async function tweeterCycle() {
   const c = loadControls();
+  if (c.tweeter.enabled) queueEduPost(c.trader.mode);
   const events = loadOutbox();
   const pending = events.filter((e) => e.status === "pending");
   if (!pending.length) return;
@@ -28,8 +31,8 @@ export async function tweeterCycle() {
     if (done >= MAX_PER_RUN) break;
     done++;
     try {
-      const draft = e.kind === "trade" ? await writeTradePost(e.facts) : await writeDailyRead(e.facts);
-      const v = await reviewTweet(draft, e.facts);
+      const draft = e.kind === "trade" ? await writeTradePost(e.facts) : e.kind === "edu" ? await writeEduPost(e.facts) : e.kind === "lend" ? await writeLendPost(e.facts) : await writeDailyRead(e.facts);
+      const v = await reviewTweet(draft, e.facts, e.kind);
       const text = v.fixedTweet?.trim() || draft;
       e.draft = draft;
       e.final = text;
@@ -45,4 +48,21 @@ export async function tweeterCycle() {
     saveOutbox(events);
   }
   saveOutbox(events);
+}
+
+// One educational post a day at EDU_POST_HOUR_UTC, rotating through the topic list
+function queueEduPost(mode: "paper" | "live") {
+  const now = new Date();
+  if (now.getUTCHours() < CONFIG.eduPostHourUtc) return;
+  const today = now.toISOString().slice(0, 10);
+  const events = loadOutbox();
+  const edu = events.filter((e) => e.kind === "edu");
+  if (edu.some((e) => e.time.startsWith(today))) return;
+  const recent = new Set(edu.slice(-20).map((e) => e.facts.topic));
+  const start = edu.length % EDU_TOPICS.length;
+  let topic = EDU_TOPICS[start];
+  for (let i = 0; i < EDU_TOPICS.length; i++) { const t = EDU_TOPICS[(start + i) % EDU_TOPICS.length]; if (!recent.has(t)) { topic = t; break; } }
+  const s = stateExists(mode) ? loadState(mode) : null;
+  addEvent("edu", { topic, mode, paperTrading: mode === "paper", agentSnapshot: s?.lastSnapshot ?? null });
+  log("edu.queued", { topic });
 }
