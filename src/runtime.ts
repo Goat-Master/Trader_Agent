@@ -30,7 +30,6 @@ export function prerequisites() {
   const trade = missing([
     ["WALLET_ADDRESS", CONFIG.walletAddress],
     ["WALLET_SECRET_KEY", CONFIG.walletSecret],
-    ["SWAPIO_API_URL", CONFIG.swapioApiUrl],
     ["ALLOW_LIVE_TRADING=yes", process.env.ALLOW_LIVE_TRADING === "yes" ? "ok" : ""],
   ]);
   const tweet = missing([

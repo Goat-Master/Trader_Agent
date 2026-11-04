@@ -4,6 +4,8 @@ import { timingSafeEqual } from "node:crypto";
 import { CONFIG } from "./config.js";
 import { loadControls, setControls, prerequisites, type Mode } from "./runtime.js";
 import { loadState, stateExists, loadOutbox, tailLog, log } from "./store.js";
+import { publicWallets } from "./wallets.js";
+import { runTestSwap, loadTestSwaps, testSwapStatus } from "./testswap.js";
 
 // DASHBOARD
 // GET  /             the page
@@ -26,7 +28,7 @@ function ledger(mode: Mode) {
   return { mode, startedAt: s.startedAt, snapshot: s.lastSnapshot, signals: s.signals, trades: s.trades.slice(-60).reverse(), equity: s.equity, lastAnalysis: s.lastAnalysis, lastProcessedDay: s.lastProcessedDay };
 }
 
-function status() {
+async function status() {
   const posts = loadOutbox().slice(-40).reverse().map(({ facts, ...e }) => ({ ...e, mode: facts?.mode }));
   return {
     agentName: CONFIG.agentName,
@@ -41,6 +43,7 @@ function status() {
     ledgers: { paper: ledger("paper"), live: ledger("live") },
     posts,
     log: tailLog(40),
+    testSwap: { ...testSwapStatus(), wallets: await publicWallets(), history: loadTestSwaps().slice(-20).reverse() },
     serverTime: new Date().toISOString(),
   };
 }
@@ -60,7 +63,16 @@ export function startServer() {
         res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-frame-options": "DENY" });
         return res.end(page());
       }
-      if (req.method === "GET" && url.pathname === "/api/status") return json(res, 200, status());
+      if (req.method === "GET" && url.pathname === "/api/status") return json(res, 200, await status());
+      if (req.method === "POST" && url.pathname === "/api/test-swap") {
+        if (!CONFIG.dashboardPassword) return json(res, 403, { error: "test swaps need DASHBOARD_PASSWORD" });
+        if (!authed(req) || req.headers["x-dashboard"] !== "1") return json(res, 403, { error: "forbidden" });
+        let body = "";
+        for await (const chunk of req) { body += chunk; if (body.length > 2000) return json(res, 413, { error: "too large" }); }
+        const p = JSON.parse(body || "{}");
+        const rec = await runTestSwap({ walletId: String(p.walletId), from: String(p.from), to: String(p.to), amountUsd: Number(p.amountUsd) });
+        return json(res, rec.status === "ok" ? 200 : 502, rec);
+      }
       if (req.method === "POST" && url.pathname === "/api/controls") {
         // Custom header + JSON body: blocks cross-site form posts
         if (!CONFIG.dashboardPassword) return json(res, 403, { error: "controls need DASHBOARD_PASSWORD" });

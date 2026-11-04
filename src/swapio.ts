@@ -1,4 +1,4 @@
-import { CONFIG, TOKENS } from "./config.js";
+import { CONFIG } from "./config.js";
 import type { Market } from "./market.js";
 import type { State } from "./store.js";
 import { rt } from "./runtime.js";
@@ -18,26 +18,13 @@ export async function executeSwap(from: string, to: string, amountIn: number, ma
   return liveSwap(from, to, amountIn);
 }
 
-// TODO(dev): wire to the real Swap.io API. Placeholder shape: request a swap transaction, sign locally, send.
+// Live swaps go through the Swap.io Agent API (hermes.ts), signed by the agent wallet.
 async function liveSwap(from: string, to: string, amountIn: number): Promise<SwapResult> {
-  if (!CONFIG.swapioApiUrl || !CONFIG.walletSecret) throw new Error("live mode needs SWAPIO_API_URL and WALLET_SECRET_KEY");
-  const { Connection, Keypair, VersionedTransaction } = await import("@solana/web3.js");
-  const kp = Keypair.fromSecretKey(Uint8Array.from(JSON.parse(CONFIG.walletSecret)));
-  const atoms = Math.floor(amountIn * 10 ** TOKENS[from].decimals);
-  const headers = { "content-type": "application/json", ...(CONFIG.swapioApiKey ? { authorization: `Bearer ${CONFIG.swapioApiKey}` } : {}) };
-  const res = await fetch(`${CONFIG.swapioApiUrl}/swap`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ inputMint: TOKENS[from].mint, outputMint: TOKENS[to].mint, amount: String(atoms), slippageBps: CONFIG.limits.maxSlippageBps, userPublicKey: kp.publicKey.toBase58() }),
-  });
-  if (!res.ok) throw new Error(`Swap.io ${res.status}: ${(await res.text()).slice(0, 300)}`);
-  const q = (await res.json()) as { swapTransaction: string; outAmount: string };
-  const tx = VersionedTransaction.deserialize(Buffer.from(q.swapTransaction, "base64"));
-  tx.sign([kp]);
-  const conn = new Connection(CONFIG.solanaRpc, "confirmed");
-  const sig = await conn.sendRawTransaction(tx.serialize(), { maxRetries: 3 });
-  const latest = await conn.getLatestBlockhash();
-  const conf = await conn.confirmTransaction({ signature: sig, ...latest }, "confirmed");
-  if (conf.value.err) throw new Error(`transaction failed: ${JSON.stringify(conf.value.err)}`);
-  return { amountIn, amountOut: Number(q.outAmount) / 10 ** TOKENS[to].decimals, txSig: sig };
+  if (!CONFIG.walletSecret) throw new Error("live mode needs WALLET_SECRET_KEY");
+  const { keypairFromSecret } = await import("./wallets.js");
+  const { hermesSwap } = await import("./hermes.js");
+  const kp = await keypairFromSecret(CONFIG.walletSecret);
+  const r = await hermesSwap(kp, from, to, amountIn);
+  if (r.expectedOut == null) throw new Error(`swap sent (${r.signature}) but the quote had no output amount: check the ledger`);
+  return { amountIn, amountOut: r.expectedOut, txSig: r.signature };
 }

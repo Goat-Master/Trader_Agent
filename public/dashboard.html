@@ -42,6 +42,8 @@
   .log b { color: var(--txt); font-weight: 600; }
   svg { width: 100%; height: 220px; display: block; }
   .legend { display: flex; gap: 14px; font-size: 13px; color: var(--mut); flex-wrap: wrap; } .legend i { display: inline-block; width: 12px; height: 3px; vertical-align: middle; margin-right: 6px; }
+  select { background: #0e0e0e; border: 1px solid var(--line); color: var(--txt); border-radius: 10px; padding: 8px 10px; font: inherit; }
+  .tsrow { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin: 10px 0; }
   .banner { background: rgba(208,114,95,.12); border: 1px solid rgba(208,114,95,.5); color: var(--red); padding: 10px 14px; border-radius: 12px; margin-bottom: 14px; display: none; }
 </style>
 </head>
@@ -80,6 +82,8 @@
     <div><h3 style="margin:0 0 10px;font-size:13px;text-transform:uppercase;letter-spacing:.12em;color:var(--gold)">Trades</h3><div class="card scroll" id="trades"></div></div>
     <div><h3 style="margin:0 0 10px;font-size:13px;text-transform:uppercase;letter-spacing:.12em;color:var(--gold)">Tweets</h3><div class="card" id="tweets"></div></div>
   </div>
+
+  <div class="section"><h3>Test swap</h3><div class="card" id="testswap"></div></div>
 
   <div class="section"><h3>Activity</h3><div class="card"><div class="log" id="log"></div></div></div>
 </div>
@@ -201,10 +205,47 @@ function render() {
       (p.final ? '<div class="t">' + esc(p.final) + "</div>" : "") + (p.reason ? '<div class="muted small">' + esc(p.reason) + "</div>" : "") + "</div>";
   }).join("") : '<span class="muted">No posts yet.</span>';
 
+  renderTestSwap();
   document.getElementById("log").innerHTML = S.log.map(function (l) { return esc(l.time.slice(5, 16).replace("T", " ")) + "  <b>" + esc(l.event) + "</b>  " + esc(JSON.stringify(l.data)).slice(0, 220); }).join("\n");
 }
 
-load(); setInterval(function () { if (!pendingLive) load(); }, 30000);
+var tsBusy = false, tsMsg = "", tsForm = null;
+function renderTestSwap() {
+  var T = S.testSwap, el = document.getElementById("testswap");
+  var keep = tsForm || { walletId: T.wallets[0] ? T.wallets[0].id : "", from: "USDC", to: "SOL", amountUsd: Math.min(2, T.maxUsd) };
+  var h = '<div class="muted small">One real swap through the Swap.io Agent API from the chosen wallet. Uses real funds (max $' + T.maxUsd + "). For testing the live path before going live.</div>";
+  if (!T.enabled) h += '<div class="warn" style="margin-top:8px">Locked. Set ALLOW_TEST_SWAPS=yes in Railway Variables to use it.</div>';
+  if (!T.wallets.length) h += '<div class="warn" style="margin-top:8px">No wallets configured. Add TEST_WALLET_1 (and optionally TEST_WALLET_1_NAME) in Railway Variables.</div>';
+  var opts = function (arr, sel, lab) { return arr.map(function (x) { var v = typeof x === "string" ? x : x.id; return '<option value="' + esc(v) + '"' + (v === sel ? " selected" : "") + ">" + esc(lab ? lab(x) : v) + "</option>"; }).join(""); };
+  var dis = (!T.enabled || !T.wallets.length || !S.canControl || tsBusy) ? " disabled" : "";
+  h += '<div class="tsrow"><select id="ts_wallet">' + opts(T.wallets, keep.walletId, function (w) { return w.name + " (" + String(w.address).slice(0, 4) + "…" + String(w.address).slice(-4) + ")"; }) + "</select>" +
+    '<select id="ts_from">' + opts(T.tokens, keep.from) + '</select><span class="muted">to</span><select id="ts_to">' + opts(T.tokens, keep.to) + "</select>" +
+    '<span class="muted">$</span><input type="text" id="ts_amt" value="' + esc(keep.amountUsd) + '" style="width:70px">' +
+    '<label class="small muted"><input type="checkbox" id="ts_ok"> uses real funds</label>' +
+    '<button class="btn gold" onclick="runTest()"' + dis + ">" + (tsBusy ? "Running…" : "Run test swap") + "</button></div>";
+  if (tsMsg) h += '<div class="' + (tsMsg.indexOf("OK") === 0 ? "warn" : "err") + '">' + esc(tsMsg) + "</div>";
+  h += T.history.length ? '<table style="margin-top:10px"><tr><th>When</th><th>Wallet</th><th>Swap</th><th>Result</th><th>Route / quotes</th></tr>' + T.history.map(function (r) {
+    var q = (r.quotes || []).map(function (x) { return (x.best ? "<b>" : "") + esc(x.provider) + (x.outAmount == null ? "" : " " + Number(x.outAmount).toPrecision(6)) + (x.best ? "</b>" : ""); }).join("<br>");
+    return "<tr><td>" + esc(r.time.slice(5, 16).replace("T", " ")) + "</td><td>" + esc(r.walletName) + "</td><td>$" + esc(r.amountUsd) + " " + esc(r.from) + " → " + esc(r.to) + "</td><td>" +
+      (r.status === "ok" ? '<span class="pill on">ok</span> <a style="color:var(--gold)" target="_blank" rel="noopener" href="' + esc(r.solscan) + '">tx</a>' : '<span class="pill off">failed</span><div class="small muted">' + esc(r.error) + "</div>") +
+      '<div class="small muted">' + Math.round(r.durationMs / 100) / 10 + "s</div></td><td class=\"small\">" + (q || "–") + "</td></tr>";
+  }).join("") + "</table>" : '<div class="muted small" style="margin-top:8px">No test swaps yet.</div>';
+  el.innerHTML = h;
+}
+async function runTest() {
+  var p = { walletId: document.getElementById("ts_wallet").value, from: document.getElementById("ts_from").value, to: document.getElementById("ts_to").value, amountUsd: Number(document.getElementById("ts_amt").value) };
+  tsForm = p;
+  if (!document.getElementById("ts_ok").checked) { tsMsg = "Tick 'uses real funds' to confirm"; renderTestSwap(); return; }
+  tsBusy = true; tsMsg = ""; renderTestSwap();
+  try {
+    var r = await fetch("/api/test-swap", { method: "POST", headers: { "content-type": "application/json", "x-dashboard": "1" }, body: JSON.stringify(p) });
+    var j = await r.json();
+    tsMsg = r.ok ? "OK: routed via " + j.provider + " in " + Math.round(j.durationMs / 100) / 10 + "s" : (j.error || "failed");
+  } catch (e) { tsMsg = e.message; }
+  tsBusy = false; await load();
+}
+
+load(); setInterval(function () { if (!pendingLive && !tsBusy) load(); }, 30000);
 </script>
 </body>
 </html>
