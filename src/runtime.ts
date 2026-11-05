@@ -1,4 +1,5 @@
-import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, existsSync } from "node:fs";
+import { writeJsonAtomic, readJson } from "./persist.js";
 import { join } from "node:path";
 import { CONFIG } from "./config.js";
 import { tradingAddressSync } from "./wallets.js";
@@ -17,7 +18,11 @@ const file = () => join(CONFIG.dataDir, "controls.json");
 
 export function loadControls(): Controls {
   mkdirSync(CONFIG.dataDir, { recursive: true });
-  if (existsSync(file())) return JSON.parse(readFileSync(file(), "utf8"));
+  if (existsSync(file())) return readJson<Controls>(file(), null as unknown as Controls) ?? defaults();
+  return defaults();
+}
+
+function defaults(): Controls {
   return {
     trader: { enabled: process.env.TRADER_ENABLED !== "off", mode: process.env.MODE === "live" && prerequisites().liveTrading.ok ? "live" : "paper" },
     tweeter: { enabled: process.env.TWEETER_ENABLED !== "off", mode: process.env.POST_MODE === "live" && prerequisites().liveTweets.ok ? "live" : "dry" },
@@ -52,7 +57,7 @@ export function setControls(patch: { trader?: Partial<Controls["trader"]>; tweet
     updatedAt: new Date().toISOString(),
   };
   if (!["paper", "live"].includes(next.trader.mode) || !["dry", "live"].includes(next.tweeter.mode)) throw new Error("invalid mode");
-  writeFileSync(file(), JSON.stringify(next, null, 2));
+  writeJsonAtomic(file(), next);
   return next;
 }
 

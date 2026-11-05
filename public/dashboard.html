@@ -57,6 +57,7 @@
     <div class="muted small" id="updated"></div>
   </header>
 
+  <div class="banner" id="storageBanner"></div>
   <div class="banner" id="killBanner">KILL_SWITCH is on in Railway. No swaps will run until it is set back to off.</div>
 
   <div class="grid g2" id="controls"></div>
@@ -86,6 +87,8 @@
   <div class="section"><h3>Wallets</h3><div class="card scroll" id="wallets"></div></div>
 
   <div class="section"><h3>Test swap</h3><div class="card" id="testswap"></div></div>
+
+  <div class="section"><h3>Backups</h3><div class="card" id="backups"></div></div>
 
   <div class="section"><h3>Activity</h3><div class="card"><div class="log" id="log"></div></div></div>
 </div>
@@ -167,6 +170,9 @@ function render() {
   document.getElementById("sub").textContent = "Strategy: " + S.sleeves.map(function (s) { return Math.round(s.weight * 100) + "% " + String(s.label).split(" (")[0]; }).join(" + ");
   document.getElementById("updated").textContent = "Refreshed " + new Date(S.serverTime).toLocaleTimeString();
   document.getElementById("killBanner").style.display = S.killSwitch ? "block" : "none";
+  var sb = document.getElementById("storageBanner");
+  sb.style.display = S.storage && S.storage.problem ? "block" : "none";
+  if (S.storage && S.storage.problem) sb.textContent = "Agents paused to protect your data: " + S.storage.problem;
 
   document.getElementById("controls").innerHTML =
     controlCard("trader", "Trading agent", "Follows the backtested rules once a day after the 00:00 UTC close. Paper = simulated money. Live = the real wallet.", [["paper", "Paper"]]) +
@@ -208,8 +214,33 @@ function render() {
   }).join("") : '<span class="muted">No posts yet.</span>';
 
   renderWallets();
+  renderBackups();
   renderTestSwap();
   document.getElementById("log").innerHTML = S.log.map(function (l) { return esc(l.time.slice(5, 16).replace("T", " ")) + "  <b>" + esc(l.event) + "</b>  " + esc(JSON.stringify(l.data)).slice(0, 220); }).join("\n");
+}
+
+var bMsg = "";
+function renderBackups() {
+  var st = S.storage || {}, b = st.backups || { count: 0, files: [] };
+  var h = '<div class="muted small">Data folder: ' + esc(st.dataDir) + (st.volume ? " · volume at " + esc(st.volume) : "") + ". Daily backups are kept on the volume (" + b.count + " so far, latest " + esc(b.latest || "none") + "). " +
+    "Download a copy now and then and keep it somewhere safe: it includes the encrypted wallet keys, which only work with your WALLET_ENCRYPTION_KEY.</div>";
+  h += '<div class="tsrow"><a class="btn gold" href="/api/backup" style="text-decoration:none">Download backup</a>' +
+    '<input type="file" id="rs_file" accept="application/json" style="color:var(--mut)"> <input type="text" id="rs_ok" placeholder="type RESTORE" style="width:120px"> <button class="btn" onclick="restoreBackup()"' + (S.canControl ? "" : " disabled") + ">Restore</button></div>";
+  h += '<div class="muted small">Restoring makes a safety copy first, and never removes wallets that already exist.</div>';
+  if (bMsg) h += '<div class="' + (bMsg.indexOf("OK") === 0 ? "warn" : "err") + '">' + esc(bMsg) + "</div>";
+  document.getElementById("backups").innerHTML = h;
+}
+async function restoreBackup() {
+  var f = document.getElementById("rs_file").files[0];
+  if (!f) { bMsg = "Choose a backup file first"; renderBackups(); return; }
+  if (document.getElementById("rs_ok").value.trim() !== "RESTORE") { bMsg = "Type RESTORE to confirm"; renderBackups(); return; }
+  try {
+    var bundle = JSON.parse(await f.text());
+    var r = await fetch("/api/backup/restore", { method: "POST", headers: { "content-type": "application/json", "x-dashboard": "1" }, body: JSON.stringify({ confirm: "RESTORE", bundle: bundle }) });
+    var j = await r.json();
+    bMsg = r.ok ? "OK: restored " + j.restored.join(", ") : (j.error || "failed");
+  } catch (e) { bMsg = e.message; }
+  await load();
 }
 
 var wBusy = false, wMsg = "";
@@ -256,8 +287,22 @@ async function walletAct(action, id) {
     var r = await fetch("/api/wallets/" + action, { method: "POST", headers: { "content-type": "application/json", "x-dashboard": "1" }, body: JSON.stringify(body) });
     var j = await r.json();
     wMsg = r.ok ? "OK: " + action + (j.address ? " " + short(j.address) : "") + (j.signature ? " (tx " + short(j.signature) + ")" : "") : (j.error || "failed");
+    if (r.ok && j.backupKey) showBackup(j);
   } catch (e) { wMsg = e.message; }
   wBusy = false; await load();
+}
+
+function showBackup(j) {
+  var box = document.createElement("div");
+  box.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.8);display:flex;align-items:center;justify-content:center;z-index:9;padding:16px";
+  box.innerHTML = '<div class="card" style="max-width:560px;width:100%"><h2>Back up this wallet key now</h2>' +
+    '<div class="muted small">' + esc(j.name) + " · " + esc(j.address) + "</div>" +
+    '<p class="warn">This private key is shown only once. Save it in your password manager. If the server data is ever lost, this is the only way back into the wallet. Never share it or post it anywhere.</p>' +
+    '<textarea id="bk" readonly style="width:100%;height:84px;background:#0e0e0e;color:var(--txt);border:1px solid var(--line);border-radius:10px;padding:8px;font:12px ui-monospace,monospace">' + esc(j.backupKey) + "</textarea>" +
+    '<div class="row"><button class="btn" id="bkcopy">Copy</button><button class="btn gold" id="bkdone">I saved it</button></div></div>';
+  document.body.appendChild(box);
+  document.getElementById("bkcopy").onclick = function () { var t = document.getElementById("bk"); t.select(); try { navigator.clipboard.writeText(t.value); } catch (e) {} };
+  document.getElementById("bkdone").onclick = function () { document.getElementById("bk").value = ""; box.remove(); };
 }
 
 var tsBusy = false, tsMsg = "", tsForm = null;
@@ -279,7 +324,7 @@ function renderTestSwap() {
     var q = (r.quotes || []).map(function (x) { return (x.best ? "<b>" : "") + esc(x.provider) + (x.outAmount == null ? "" : " " + Number(x.outAmount).toPrecision(6)) + (x.best ? "</b>" : ""); }).join("<br>");
     return "<tr><td>" + esc(r.time.slice(5, 16).replace("T", " ")) + "</td><td>" + esc(r.walletName) + "</td><td>$" + esc(r.amountUsd) + " " + esc(r.from) + " → " + esc(r.to) + "</td><td>" +
       (r.status === "ok" ? '<span class="pill on">ok</span> <a style="color:var(--gold)" target="_blank" rel="noopener" href="' + esc(r.solscan) + '">tx</a>' : '<span class="pill off">failed</span><div class="small muted">' + esc(r.error) + "</div>") +
-      '<div class="small muted">' + Math.round(r.durationMs / 100) / 10 + "s</div></td><td class=\"small\">" + (q || "–") + "</td></tr>";
+      '<div class="small muted">' + Math.round(r.durationMs / 100) / 10 + "s" + (r.apiCostUsdc != null ? " · API $" + r.apiCostUsdc : "") + "</div></td><td class=\"small\">" + (q || "–") + "</td></tr>";
   }).join("") + "</table>" : '<div class="muted small" style="margin-top:8px">No test swaps yet.</div>';
   el.innerHTML = h;
 }

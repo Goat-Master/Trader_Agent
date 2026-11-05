@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { writeJsonAtomic, readJson, backupNow, storageProblem as sp } from "./persist.js";
 import { join } from "node:path";
 import { randomBytes, scryptSync, createCipheriv, createDecipheriv } from "node:crypto";
 import { CONFIG } from "./config.js";
@@ -14,13 +14,14 @@ const file = () => join(CONFIG.dataDir, "keystore.json");
 
 export const keystoreReady = () => (process.env.WALLET_ENCRYPTION_KEY || "").length >= 16;
 
+export const storageProblem = sp;
+
 function load(): KeystoreFile {
-  if (existsSync(file())) return JSON.parse(readFileSync(file(), "utf8"));
-  return { version: 1, salt: randomBytes(16).toString("hex"), wallets: [] };
+  return readJson<KeystoreFile>(file(), { version: 1, salt: randomBytes(16).toString("hex"), wallets: [] }, true);
 }
 function save(k: KeystoreFile) {
-  mkdirSync(CONFIG.dataDir, { recursive: true });
-  writeFileSync(file(), JSON.stringify(k, null, 2), { mode: 0o600 });
+  writeJsonAtomic(file(), k, 0o600);
+  backupNow("keystore.json");
 }
 function key(salt: string) {
   if (!keystoreReady()) throw new Error("set WALLET_ENCRYPTION_KEY (16+ characters) in Railway first");

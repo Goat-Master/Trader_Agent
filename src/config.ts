@@ -71,7 +71,10 @@ export const CONFIG = {
   dashboardPassword: env("DASHBOARD_PASSWORD", ""),
   port: num("PORT", 3000),
   tweeterIntervalMinutes: num("TWEETER_INTERVAL_MINUTES", 5),
+  backupDays: num("BACKUP_DAYS", 14), // daily backups kept on the volume
   testSwapMaxUsd: num("TEST_SWAP_MAX_USD", 5),
+  x402MaxUsdc: num("X402_MAX_USDC", 0.1), // never pay more than this per Agent API call
+  x402ComputeUnits: num("X402_COMPUTE_UNITS", 40000), // compute limit for the x402 payment transaction
   walletAdmin: {
     maxSol: num("FUND_MAX_SOL", 0.1), // cap per funding transfer
     maxUsdc: num("FUND_MAX_USDC", 50),

@@ -1,8 +1,8 @@
-import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { writeJsonAtomic, readJson } from "./persist.js";
 import { join } from "node:path";
 import { CONFIG, TOKENS } from "./config.js";
 import { log } from "./store.js";
-import { addWallet, storedWallets, keystoreReady, removeWallet } from "./keystore.js";
+import { addWallet, storedWallets, keystoreReady, removeWallet, storageProblem } from "./keystore.js";
 import { listWallets, treasuryKeypair, keypairFor } from "./wallets.js";
 import { balancesOf } from "./market.js";
 import { loadControls } from "./runtime.js";
@@ -16,6 +16,8 @@ export function walletAdminStatus() {
   if (process.env.ALLOW_WALLET_ADMIN !== "yes") missing.push("ALLOW_WALLET_ADMIN=yes");
   if (!process.env.TREASURY_SECRET_KEY) missing.push("TREASURY_SECRET_KEY");
   if (!keystoreReady()) missing.push("WALLET_ENCRYPTION_KEY (16+ characters)");
+  const storage = storageProblem();
+  if (storage) missing.push(storage);
   return { enabled: missing.length === 0, missing, maxSol: CONFIG.walletAdmin.maxSol, maxUsdc: CONFIG.walletAdmin.maxUsdc, maxWallets: CONFIG.walletAdmin.maxWallets };
 }
 const assertEnabled = () => { const s = walletAdminStatus(); if (!s.enabled) throw new Error(`wallet admin is locked, missing: ${s.missing.join(", ")}`); if (CONFIG.killSwitch) throw new Error("KILL_SWITCH is on"); };
@@ -23,10 +25,9 @@ const assertEnabled = () => { const s = walletAdminStatus(); if (!s.enabled) thr
 // ---------- history ----------
 export type TransferRecord = { time: string; kind: "create" | "fund" | "sweep"; wallet: string; walletName: string; sol?: number; usdc?: number; signature?: string; status: "ok" | "failed"; error?: string };
 const histFile = () => join(CONFIG.dataDir, "transfers.json");
-export const loadTransfers = (): TransferRecord[] => (existsSync(histFile()) ? JSON.parse(readFileSync(histFile(), "utf8")) : []);
+export const loadTransfers = (): TransferRecord[] => readJson<TransferRecord[]>(histFile(), []);
 function record(r: TransferRecord) {
-  mkdirSync(CONFIG.dataDir, { recursive: true });
-  const all = loadTransfers(); all.push(r); writeFileSync(histFile(), JSON.stringify(all.slice(-200), null, 2));
+  const all = loadTransfers(); all.push(r); writeJsonAtomic(histFile(), all.slice(-200));
   log(`wallet.${r.kind}.${r.status}`, { wallet: r.walletName, sol: r.sol, usdc: r.usdc, signature: r.signature, error: r.error });
 }
 
@@ -46,7 +47,8 @@ export async function createWallet(name: string, role: "trading" | "test") {
   const kp = Keypair.generate();
   const w = addWallet(name, role, kp.publicKey.toBase58(), kp.secretKey);
   record({ time: new Date().toISOString(), kind: "create", wallet: w.id, walletName: w.name, status: "ok" });
-  return w;
+  // Shown once, so you can keep an offline backup (password manager). Never stored in plain text or logged.
+  return { ...w, backupKey: base58Encode(kp.secretKey) };
 }
 
 // ---------- fund: treasury -> wallet ----------
@@ -135,3 +137,12 @@ export async function walletOverview() {
   return data;
 }
 export const clearWalletCache = () => { cache = null; };
+
+const B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+function base58Encode(buf: Uint8Array): string {
+  let n = BigInt("0x" + (Buffer.from(buf).toString("hex") || "0"));
+  let s = "";
+  while (n > 0n) { s = B58[Number(n % 58n)] + s; n /= 58n; }
+  for (const b of buf) { if (b === 0) s = "1" + s; else break; }
+  return s;
+}

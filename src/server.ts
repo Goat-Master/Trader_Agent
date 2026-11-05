@@ -5,6 +5,7 @@ import { CONFIG } from "./config.js";
 import { loadControls, setControls, prerequisites, type Mode } from "./runtime.js";
 import { loadState, stateExists, loadOutbox, tailLog, log } from "./store.js";
 import { publicWallets } from "./wallets.js";
+import { storageProblem, backupInfo, exportBundle, restoreBundle } from "./persist.js";
 import { runTestSwap, loadTestSwaps, testSwapStatus } from "./testswap.js";
 import { walletOverview, createWallet, fundWallet, sweepWallet, clearWalletCache } from "./transfers.js";
 
@@ -38,6 +39,7 @@ async function status() {
     limits: CONFIG.limits,
     lending: { mode: CONFIG.lending.mode, paperApy: CONFIG.lending.paperApy, cashBufferUsd: CONFIG.lending.cashBufferUsd },
     killSwitch: CONFIG.killSwitch,
+    storage: { problem: storageProblem(), dataDir: CONFIG.dataDir, volume: process.env.RAILWAY_VOLUME_MOUNT_PATH || null, backups: backupInfo() },
     controls: loadControls(),
     prerequisites: prerequisites(),
     canControl: Boolean(CONFIG.dashboardPassword),
@@ -66,6 +68,23 @@ export function startServer() {
         return res.end(page());
       }
       if (req.method === "GET" && url.pathname === "/api/status") return json(res, 200, await status());
+      if (req.method === "GET" && url.pathname === "/api/backup") {
+        if (!CONFIG.dashboardPassword) return json(res, 403, { error: "backups need DASHBOARD_PASSWORD" });
+        res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store", "content-disposition": `attachment; filename="agent-backup-${new Date().toISOString().slice(0, 10)}.json"` });
+        log("backup.downloaded");
+        return res.end(JSON.stringify(exportBundle()));
+      }
+      if (req.method === "POST" && url.pathname === "/api/backup/restore") {
+        if (!CONFIG.dashboardPassword) return json(res, 403, { error: "restore needs DASHBOARD_PASSWORD" });
+        if (!authed(req) || req.headers["x-dashboard"] !== "1") return json(res, 403, { error: "forbidden" });
+        let body = "";
+        for await (const chunk of req) { body += chunk; if (body.length > 20_000_000) return json(res, 413, { error: "too large" }); }
+        const p = JSON.parse(body || "{}");
+        if (p.confirm !== "RESTORE") return json(res, 400, { error: "type RESTORE to confirm" });
+        const out = restoreBundle(p.bundle);
+        log("backup.restored", out);
+        return json(res, 200, out);
+      }
       if (req.method === "POST" && url.pathname.startsWith("/api/wallets/")) {
         if (!CONFIG.dashboardPassword) return json(res, 403, { error: "wallet admin needs DASHBOARD_PASSWORD" });
         if (!authed(req) || req.headers["x-dashboard"] !== "1") return json(res, 403, { error: "forbidden" });

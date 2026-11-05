@@ -1,4 +1,5 @@
-import { mkdirSync, readFileSync, writeFileSync, appendFileSync, existsSync } from "node:fs";
+import { mkdirSync, readFileSync, appendFileSync, existsSync, statSync, renameSync } from "node:fs";
+import { writeJsonAtomic, readJson } from "./persist.js";
 import { join } from "node:path";
 import { CONFIG, TOKENS } from "./config.js";
 import type { Mode } from "./runtime.js";
@@ -49,7 +50,7 @@ export function stateExists(mode: Mode) {
 
 export function loadState(mode: Mode): State {
   mkdirSync(CONFIG.dataDir, { recursive: true });
-  if (existsSync(file(mode))) return JSON.parse(readFileSync(file(mode), "utf8"));
+  if (existsSync(file(mode))) { const s = readJson<State | null>(file(mode), null, true); if (s) return s; }
   const paperBalances = Object.fromEntries(Object.keys(TOKENS).map((s) => [s, 0]));
   paperBalances.USDC = CONFIG.startUsdc;
   paperBalances.SOL = CONFIG.limits.minSolForFees * 2; // fee reserve, not part of any sleeve
@@ -66,7 +67,7 @@ export function loadState(mode: Mode): State {
 
 export function saveState(s: State) {
   s.equity = s.equity.slice(-1000);
-  writeFileSync(file(s.mode), JSON.stringify(s, null, 2));
+  writeJsonAtomic(file(s.mode), s);
 }
 
 // ---------- outbox: the trading agent drops events here, the tweeting agent picks them up ----------
@@ -86,12 +87,11 @@ export type OutboxEvent = {
 const outboxFile = () => join(CONFIG.dataDir, "outbox.json");
 
 export function loadOutbox(): OutboxEvent[] {
-  return existsSync(outboxFile()) ? JSON.parse(readFileSync(outboxFile(), "utf8")) : [];
+  return readJson<OutboxEvent[]>(outboxFile(), []);
 }
 
 export function saveOutbox(events: OutboxEvent[]) {
-  mkdirSync(CONFIG.dataDir, { recursive: true });
-  writeFileSync(outboxFile(), JSON.stringify(events.slice(-300), null, 2));
+  writeJsonAtomic(outboxFile(), events.slice(-300));
 }
 
 export function addEvent(kind: OutboxEvent["kind"], facts: Record<string, any>) {
@@ -108,6 +108,8 @@ export function log(event: string, data: unknown = {}) {
   console.log(JSON.stringify(line));
   try {
     mkdirSync(CONFIG.dataDir, { recursive: true });
+    // Rotate the activity log at 5 MB (the previous one is kept as activity.1.jsonl)
+    if (existsSync(logFile()) && statSync(logFile()).size > 5_000_000) renameSync(logFile(), join(CONFIG.dataDir, "activity.1.jsonl"));
     appendFileSync(logFile(), JSON.stringify(line) + "\n");
   } catch {}
 }
