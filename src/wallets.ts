@@ -76,7 +76,7 @@ export async function publicWallets() {
 }
 
 const ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-function base58Decode(s: string): Uint8Array {
+export function base58Decode(s: string): Uint8Array {
   const bytes: number[] = [0];
   for (const ch of s) {
     const v = ALPHABET.indexOf(ch);

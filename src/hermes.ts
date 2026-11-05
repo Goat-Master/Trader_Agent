@@ -72,6 +72,17 @@ const outAmountOf = (q: HermesQuote, decimals: number): number | null => {
   return raw == null ? null : Number(raw) / 10 ** decimals;
 };
 
+// The serialized transaction can sit under different names (transaction, tx, swapTransaction, data...) or one level down.
+const TX_KEYS = ["transaction", "serializedTransaction", "swapTransaction", "tx", "txData", "data", "rawTransaction", "base64"];
+function findTx(o: any, depth = 0): string | null {
+  if (typeof o === "string") return o.length > 100 ? o : null;
+  if (!o || typeof o !== "object" || depth > 3) return null;
+  if (Array.isArray(o)) { for (const x of o) { const t = findTx(x, depth + 1); if (t) return t; } return null; }
+  for (const k of TX_KEYS) if (k in o) { const t = findTx(o[k], depth + 1); if (t) return t; }
+  for (const k of ["transactions", "result", "response", "build"]) if (k in o) { const t = findTx(o[k], depth + 1); if (t) return t; }
+  return null;
+}
+
 // Full swap of `amountIn` units of `from` into `to`, signed by `kp`.
 export async function hermesSwap(kp: Keypair, from: string, to: string, amountIn: number, slippageBps = CONFIG.limits.maxSlippageBps): Promise<HermesSwap> {
   const base = (CONFIG.swapioApiUrl || "https://hermes.swap.io").replace(/\/$/, "");
@@ -94,11 +105,15 @@ export async function hermesSwap(kp: Keypair, from: string, to: string, amountIn
   // 2. Build
   const br = await pay(`${base}/v1/swap/build-tx`, { provider: best.provider.key, userAddress: user, chainKey: "sol", quoteResponse: best.providerQuote });
   if (!br.ok) throw new Error(`build-tx failed ${br.status}: ${(await br.text()).slice(0, 300)}`);
-  const { transaction } = (await br.json()) as { transaction: string };
+  const built = await br.json();
+  const transaction = findTx(built);
+  if (!transaction) throw new Error(`build-tx returned no transaction we recognise. Response: ${JSON.stringify(built).slice(0, 400)}`);
 
   // 3. Sign and send with our own RPC (skips the paid submit-tx call)
   const { Connection, VersionedTransaction } = await import("@solana/web3.js");
-  const tx = VersionedTransaction.deserialize(Buffer.from(transaction, "base64"));
+  let tx: InstanceType<typeof VersionedTransaction>;
+  try { tx = VersionedTransaction.deserialize(Buffer.from(transaction, "base64")); }
+  catch { const { base58Decode } = await import("./wallets.js"); tx = VersionedTransaction.deserialize(base58Decode(transaction)); }
   tx.sign([kp]);
   const conn = new Connection(CONFIG.solanaRpc, "confirmed");
   const latest = await conn.getLatestBlockhash();
