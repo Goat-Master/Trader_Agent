@@ -1,6 +1,7 @@
 import { CONFIG, TOKENS } from "./config.js";
 import type { State } from "./store.js";
 import { rt } from "./runtime.js";
+import { tradingAddressSync } from "./wallets.js";
 
 export type Market = Record<string, number>; // symbol -> USD price
 
@@ -29,7 +30,13 @@ async function rpc(method: string, params: unknown[]) {
 // Wallet balances in token units (paper mode uses the simulated balances).
 export async function getBalances(state: State): Promise<Record<string, number>> {
   if (rt.tradeMode === "paper") return { ...state.paperBalances };
-  const owner = CONFIG.walletAddress;
+  const owner = tradingAddressSync();
+  if (!owner) throw new Error("no trading wallet configured");
+  return balancesOf(owner);
+}
+
+// Token balances (in token units) of any wallet address
+export async function balancesOf(owner: string): Promise<Record<string, number>> {
   const out: Record<string, number> = Object.fromEntries(Object.keys(TOKENS).map((s) => [s, 0]));
   out.SOL = (await rpc("getBalance", [owner])).value / 1e9;
   for (const [sym, t] of Object.entries(TOKENS)) {

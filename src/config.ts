@@ -71,7 +71,12 @@ export const CONFIG = {
   dashboardPassword: env("DASHBOARD_PASSWORD", ""),
   port: num("PORT", 3000),
   tweeterIntervalMinutes: num("TWEETER_INTERVAL_MINUTES", 5),
-  testSwapMaxUsd: num("TEST_SWAP_MAX_USD", 5), // cap for dashboard test swaps (also needs ALLOW_TEST_SWAPS=yes)
+  testSwapMaxUsd: num("TEST_SWAP_MAX_USD", 5),
+  walletAdmin: {
+    maxSol: num("FUND_MAX_SOL", 0.1), // cap per funding transfer
+    maxUsdc: num("FUND_MAX_USDC", 50),
+    maxWallets: num("MAX_BOT_WALLETS", 10), // test wallets the bot may create
+  }, // cap for dashboard test swaps (also needs ALLOW_TEST_SWAPS=yes)
   eduPostHourUtc: num("EDU_POST_HOUR_UTC", 14), // daily educational post (14:00 UTC = afternoon EU, morning US)
   tradePosts: env("TRADE_POSTS", "all") as "open" | "all", // all = post when a trade opens and when it closes, open = opens only
   anthropicKey: env("ANTHROPIC_API_KEY", ""),

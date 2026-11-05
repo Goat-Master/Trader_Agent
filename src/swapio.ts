@@ -1,4 +1,3 @@
-import { CONFIG } from "./config.js";
 import type { Market } from "./market.js";
 import type { State } from "./store.js";
 import { rt } from "./runtime.js";
@@ -20,10 +19,9 @@ export async function executeSwap(from: string, to: string, amountIn: number, ma
 
 // Live swaps go through the Swap.io Agent API (hermes.ts), signed by the agent wallet.
 async function liveSwap(from: string, to: string, amountIn: number): Promise<SwapResult> {
-  if (!CONFIG.walletSecret) throw new Error("live mode needs WALLET_SECRET_KEY");
-  const { keypairFromSecret } = await import("./wallets.js");
+  const { tradingKeypair } = await import("./wallets.js");
   const { hermesSwap } = await import("./hermes.js");
-  const kp = await keypairFromSecret(CONFIG.walletSecret);
+  const kp = await tradingKeypair();
   const r = await hermesSwap(kp, from, to, amountIn);
   if (r.expectedOut == null) throw new Error(`swap sent (${r.signature}) but the quote had no output amount: check the ledger`);
   return { amountIn, amountOut: r.expectedOut, txSig: r.signature };

@@ -83,6 +83,8 @@
     <div><h3 style="margin:0 0 10px;font-size:13px;text-transform:uppercase;letter-spacing:.12em;color:var(--gold)">Tweets</h3><div class="card" id="tweets"></div></div>
   </div>
 
+  <div class="section"><h3>Wallets</h3><div class="card scroll" id="wallets"></div></div>
+
   <div class="section"><h3>Test swap</h3><div class="card" id="testswap"></div></div>
 
   <div class="section"><h3>Activity</h3><div class="card"><div class="log" id="log"></div></div></div>
@@ -205,8 +207,57 @@ function render() {
       (p.final ? '<div class="t">' + esc(p.final) + "</div>" : "") + (p.reason ? '<div class="muted small">' + esc(p.reason) + "</div>" : "") + "</div>";
   }).join("") : '<span class="muted">No posts yet.</span>';
 
+  renderWallets();
   renderTestSwap();
   document.getElementById("log").innerHTML = S.log.map(function (l) { return esc(l.time.slice(5, 16).replace("T", " ")) + "  <b>" + esc(l.event) + "</b>  " + esc(JSON.stringify(l.data)).slice(0, 220); }).join("\n");
+}
+
+var wBusy = false, wMsg = "";
+function short(a) { a = String(a || ""); return a.length > 12 ? a.slice(0, 4) + "…" + a.slice(-4) : a; }
+function bal(b, k) { return b && b[k] != null ? Number(b[k]).toLocaleString(undefined, { maximumFractionDigits: k === "SOL" ? 4 : 2 }) : "–"; }
+function renderWallets() {
+  var W = S.walletAdmin || { enabled: false, missing: [], wallets: [], history: [] }, el = document.getElementById("wallets");
+  var dis = (!W.enabled || !S.canControl || wBusy) ? " disabled" : "";
+  var h = '<div class="muted small">The treasury funds the other wallets. The bot creates its own trading and test wallets and keeps their keys encrypted on the server: they are never shown here. Funding is capped at ' + W.maxSol + " SOL and " + W.maxUsdc + " USDC per transfer. Sweeps always go back to the treasury.</div>";
+  if (!W.enabled) h += '<div class="warn" style="margin-top:8px">Locked. Missing in Railway: ' + esc((W.missing || []).join(", ")) + "</div>";
+  var t = W.treasury;
+  h += '<table style="margin-top:10px"><tr><th>Wallet</th><th>Role</th><th>Address</th><th>SOL</th><th>USDC</th><th>Other</th><th>Actions</th></tr>';
+  h += "<tr><td><b>Treasury</b></td><td>funding</td><td>" + (t ? esc(short(t.address)) : '<span class="muted">not set</span>') + "</td><td>" + bal(t, "SOL") + "</td><td>" + bal(t, "USDC") + "</td><td>–</td><td></td></tr>";
+  (W.wallets || []).forEach(function (w) {
+    var b = w.balances, other = b ? Object.keys(b).filter(function (k) { return k !== "SOL" && k !== "USDC" && b[k] > 0; }).map(function (k) { return k + " " + bal(b, k); }).join(", ") : "";
+    h += "<tr><td><b>" + esc(w.name) + '</b><div class="small muted">' + (w.source === "bot" ? "created by the bot" : "from Railway") + "</div></td><td>" + esc(w.role) + "</td><td>" + esc(short(w.address)) + "</td><td>" + bal(b, "SOL") + "</td><td>" + bal(b, "USDC") + "</td><td>" + (esc(other) || "–") + "</td><td>" +
+      '<input type="text" id="fs_' + esc(w.id) + '" placeholder="SOL" style="width:64px"> <input type="text" id="fu_' + esc(w.id) + '" placeholder="USDC" style="width:70px"> ' +
+      '<button class="btn" onclick="walletAct(\'fund\',\'' + esc(w.id) + "')\"" + dis + ">Fund</button> " +
+      '<button class="btn" onclick="walletAct(\'sweep\',\'' + esc(w.id) + "')\"" + dis + ">Sweep back</button>" +
+      (w.source === "bot" && w.role === "test" ? ' <label class="small muted"><input type="checkbox" id="rm_' + esc(w.id) + '"> delete after sweep</label>' : "") + "</td></tr>";
+  });
+  h += "</table>";
+  h += '<div class="tsrow"><input type="text" id="nw_name" placeholder="New wallet name" style="width:180px"><select id="nw_role"><option value="test">test wallet</option><option value="trading">trading wallet</option></select>' +
+    '<button class="btn gold" onclick="walletAct(\'create\')"' + dis + ">Create wallet</button>" +
+    '<label class="small muted"><input type="checkbox" id="w_ok"> funding and sweeps move real funds</label></div>';
+  if (wMsg) h += '<div class="' + (wMsg.indexOf("OK") === 0 ? "warn" : "err") + '">' + esc(wMsg) + "</div>";
+  if ((W.history || []).length) h += '<table style="margin-top:8px"><tr><th>When</th><th>Action</th><th>Wallet</th><th>Amount</th><th>Result</th></tr>' + W.history.map(function (r) {
+    return "<tr><td>" + esc(r.time.slice(5, 16).replace("T", " ")) + "</td><td>" + esc(r.kind) + "</td><td>" + esc(r.walletName) + "</td><td>" + (r.sol ? esc(r.sol) + " SOL " : "") + (r.usdc ? esc(r.usdc) + " USDC" : "") + "</td><td>" +
+      (r.status === "ok" ? (r.signature ? '<a style="color:var(--gold)" target="_blank" rel="noopener" href="https://solscan.io/tx/' + esc(r.signature) + '">tx</a>' : '<span class="pill on">ok</span>') : '<span class="pill off">failed</span> <span class="small muted">' + esc(r.error) + "</span>") + "</td></tr>";
+  }).join("") + "</table>";
+  el.innerHTML = h;
+}
+async function walletAct(action, id) {
+  var body = {};
+  if (action === "create") body = { name: document.getElementById("nw_name").value, role: document.getElementById("nw_role").value };
+  else {
+    if (!document.getElementById("w_ok").checked) { wMsg = "Tick 'funding and sweeps move real funds' to confirm"; renderWallets(); return; }
+    body.id = id;
+    if (action === "fund") { body.sol = Number(document.getElementById("fs_" + id).value || 0); body.usdc = Number(document.getElementById("fu_" + id).value || 0); }
+    if (action === "sweep") { var rm = document.getElementById("rm_" + id); body.remove = !!(rm && rm.checked); }
+  }
+  wBusy = true; wMsg = ""; renderWallets();
+  try {
+    var r = await fetch("/api/wallets/" + action, { method: "POST", headers: { "content-type": "application/json", "x-dashboard": "1" }, body: JSON.stringify(body) });
+    var j = await r.json();
+    wMsg = r.ok ? "OK: " + action + (j.address ? " " + short(j.address) : "") + (j.signature ? " (tx " + short(j.signature) + ")" : "") : (j.error || "failed");
+  } catch (e) { wMsg = e.message; }
+  wBusy = false; await load();
 }
 
 var tsBusy = false, tsMsg = "", tsForm = null;
@@ -245,7 +296,7 @@ async function runTest() {
   tsBusy = false; await load();
 }
 
-load(); setInterval(function () { if (!pendingLive && !tsBusy) load(); }, 30000);
+load(); setInterval(function () { if (!pendingLive && !tsBusy && !wBusy) load(); }, 30000);
 </script>
 </body>
 </html>

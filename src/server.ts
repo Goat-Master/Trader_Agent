@@ -6,6 +6,7 @@ import { loadControls, setControls, prerequisites, type Mode } from "./runtime.j
 import { loadState, stateExists, loadOutbox, tailLog, log } from "./store.js";
 import { publicWallets } from "./wallets.js";
 import { runTestSwap, loadTestSwaps, testSwapStatus } from "./testswap.js";
+import { walletOverview, createWallet, fundWallet, sweepWallet, clearWalletCache } from "./transfers.js";
 
 // DASHBOARD
 // GET  /             the page
@@ -44,6 +45,7 @@ async function status() {
     posts,
     log: tailLog(40),
     testSwap: { ...testSwapStatus(), wallets: await publicWallets(), history: loadTestSwaps().slice(-20).reverse() },
+    walletAdmin: await walletOverview().catch((e) => ({ enabled: false, missing: [(e as Error).message], wallets: [], history: [] })),
     serverTime: new Date().toISOString(),
   };
 }
@@ -64,6 +66,21 @@ export function startServer() {
         return res.end(page());
       }
       if (req.method === "GET" && url.pathname === "/api/status") return json(res, 200, await status());
+      if (req.method === "POST" && url.pathname.startsWith("/api/wallets/")) {
+        if (!CONFIG.dashboardPassword) return json(res, 403, { error: "wallet admin needs DASHBOARD_PASSWORD" });
+        if (!authed(req) || req.headers["x-dashboard"] !== "1") return json(res, 403, { error: "forbidden" });
+        let body = "";
+        for await (const chunk of req) { body += chunk; if (body.length > 2000) return json(res, 413, { error: "too large" }); }
+        const p = JSON.parse(body || "{}");
+        const action = url.pathname.split("/")[3];
+        let out: unknown;
+        if (action === "create") out = await createWallet(String(p.name || ""), p.role === "trading" ? "trading" : "test");
+        else if (action === "fund") out = await fundWallet(String(p.id), Number(p.sol || 0), Number(p.usdc || 0));
+        else if (action === "sweep") out = await sweepWallet(String(p.id), Boolean(p.remove));
+        else return json(res, 404, { error: "unknown action" });
+        clearWalletCache();
+        return json(res, 200, out);
+      }
       if (req.method === "POST" && url.pathname === "/api/test-swap") {
         if (!CONFIG.dashboardPassword) return json(res, 403, { error: "test swaps need DASHBOARD_PASSWORD" });
         if (!authed(req) || req.headers["x-dashboard"] !== "1") return json(res, 403, { error: "forbidden" });

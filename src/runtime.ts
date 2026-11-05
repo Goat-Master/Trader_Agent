@@ -1,6 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { CONFIG } from "./config.js";
+import { tradingAddressSync } from "./wallets.js";
 
 // Runtime controls, changed from the dashboard and saved on the volume.
 // Env vars only set the starting values; after that the dashboard is the source of truth.
@@ -28,8 +29,7 @@ export function loadControls(): Controls {
 export function prerequisites() {
   const missing = (keys: [string, string | undefined][]) => keys.filter(([, v]) => !v).map(([k]) => k);
   const trade = missing([
-    ["WALLET_ADDRESS", CONFIG.walletAddress],
-    ["WALLET_SECRET_KEY", CONFIG.walletSecret],
+    ["a trading wallet (WALLET_ADDRESS + WALLET_SECRET_KEY, or create one on the dashboard)", tradingAddressSync() && (CONFIG.walletSecret ? CONFIG.walletAddress : "ok")],
     ["ALLOW_LIVE_TRADING=yes", process.env.ALLOW_LIVE_TRADING === "yes" ? "ok" : ""],
   ]);
   const tweet = missing([
