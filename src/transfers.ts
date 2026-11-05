@@ -63,6 +63,13 @@ export async function fundWallet(id: string, sol: number, usdc: number) {
     try {
       const from = await treasuryKeypair();
       const to = (await target.getKeypair()).publicKey;
+      // Check the treasury first, so a short balance gives a clear message instead of a simulation log.
+      // SOL needed: the amount sent + the fee + up to 0.00204 SOL to open the new wallet's USDC account.
+      const tb = await balancesOf(from.publicKey.toBase58());
+      const solNeeded = sol + (usdc > 0 ? 0.00204 : 0) + 0.00001;
+      if (usdc > tb.USDC) throw new Error(`treasury has ${tb.USDC.toFixed(2)} USDC, not enough to send ${usdc}`);
+      if (tb.SOL < solNeeded) throw new Error(`treasury has ${tb.SOL.toFixed(4)} SOL, needs ${solNeeded.toFixed(4)} (amount + fee${usdc > 0 ? " + 0.002 to open the wallet's USDC account" : ""}). Top up the treasury or send less SOL`);
+      if (sol > 0 && sol < 0.001) throw new Error("send at least 0.001 SOL, Solana's minimum for a new wallet");
       rec.signature = await send(from, to, sol, usdc);
       rec.status = "ok";
     } catch (e) { rec.error = (e as Error).message.slice(0, 300); }
@@ -114,7 +121,16 @@ async function send(from: import("@solana/web3.js").Keypair, to: import("@solana
     tx.add(spl.createTransferCheckedInstruction(srcAta, mint, dstAta, from.publicKey, BigInt(Math.floor(usdc * 1e6)), 6));
   }
   if (sol > 0) tx.add(web3.SystemProgram.transfer({ fromPubkey: from.publicKey, toPubkey: to, lamports: Math.floor(sol * 1e9) }));
-  return web3.sendAndConfirmTransaction(conn, tx, [from], { commitment: "confirmed" });
+  try { return await web3.sendAndConfirmTransaction(conn, tx, [from], { commitment: "confirmed" }); }
+  catch (e: any) {
+    // Shorten Solana's long simulation logs to the line that matters
+    let logs: string[] = e?.logs ?? [];
+    if (!logs.length && typeof e?.getLogs === "function") { try { logs = await e.getLogs(conn); } catch {} }
+    const all = `${e?.message ?? e} ${logs.join(" ")}`;
+    if (/insufficient lamports|insufficient funds|0x1\b/i.test(all)) throw new Error("not enough balance in the sending wallet (SOL for fees and account rent, or the USDC being sent)");
+    const lines = logs.filter((l) => /failed|error/i.test(l)).slice(-2);
+    throw new Error(lines.length ? lines.join(" | ") : String(e?.message ?? e).slice(0, 300));
+  }
 }
 
 // ---------- overview for the dashboard (public info only, cached) ----------

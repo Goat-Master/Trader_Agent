@@ -84,17 +84,17 @@ function findTx(o: any, depth = 0): string | null {
 }
 
 // Turn a long simulation log into one readable line. Known Solana and Jupiter error codes get plain names.
-const KNOWN: [RegExp, string, boolean][] = [
+const KNOWN: [RegExp, string, boolean, boolean?][] = [
   [/0x1771|6001|SlippageToleranceExceeded|slippage/i, "price moved past the slippage limit (stale quote)", true],
   [/BlockhashNotFound|Blockhash not found|block height exceeded/i, "quote expired before it was sent", true],
-  [/insufficient lamports|0x1\b|insufficient funds/i, "not enough balance: check the token being sold, plus about 0.01 SOL for fees and new token accounts", false],
+  [/insufficient lamports|0x1\b|insufficient funds/i, "not enough balance: check the token being sold, plus about 0.01 SOL for fees and new token accounts", false, true],
   [/AccountNotFound|could not find account/i, "a token account is missing in the wallet (it needs a little SOL to create one)", false],
 ];
-async function simulationReason(e: any, conn: any): Promise<{ text: string; retry: boolean }> {
+async function simulationReason(e: any, conn: any): Promise<{ text: string; retry: boolean; balance?: boolean }> {
   let logs: string[] = e?.logs ?? [];
   if (!logs.length && typeof e?.getLogs === "function") { try { logs = await e.getLogs(conn); } catch {} }
   const all = `${e?.message ?? e} ${logs.join(" ")}`;
-  for (const [re, text, retry] of KNOWN) if (re.test(all)) return { text, retry };
+  for (const [re, text, retry, balance] of KNOWN) if (re.test(all)) return { text, retry, balance };
   const errLines = logs.filter((l) => /failed|error|Error/.test(l)).slice(-3);
   return { text: (errLines.length ? errLines.join(" | ") : String(e?.message ?? e)).slice(0, 400), retry: false };
 }
@@ -122,23 +122,34 @@ export async function hermesSwap(kp: Keypair, from: string, to: string, amountIn
   const conn = new Connection(CONFIG.solanaRpc, "confirmed");
 
   // Quote, build, sign, send. A failed simulation means nothing was sent, so a stale quote is retried once with a fresh one.
+  // A failed simulation means nothing was sent, so it is safe to try again:
+  //   stale quote  -> fresh quote, once
+  //   route error  -> next provider from the same quote, up to 3 providers
   let quotes: HermesQuote[] = [], best!: HermesQuote, signature = "";
-  for (let attempt = 1; ; attempt++) {
+  const tried = new Set<string>();
+  let requote = true, requotes = 0;
+  for (let attempt = 1; attempt <= 4; attempt++) {
     // 1. Quote
-    const qr = await pay(`${base}/v1/swap/quote`, {
-      input: { token: TOKENS[from].mint, amount: atoms, chainKey: "sol" },
-      output: { token: TOKENS[to].mint, chainKey: "sol" },
-      userAddress: user,
-      slippageBps,
-    });
-    if (!qr.ok) throw new Error(`quote failed ${qr.status}: ${(await qr.text()).slice(0, 300)}`);
-    quotes = ((await qr.json()) as { quotes: HermesQuote[] }).quotes;
-    if (!quotes?.length) throw new Error("no quotes returned");
-    best = quotes.find((q) => q.bestQuote) ?? quotes[0];
+    if (requote) {
+      const qr = await pay(`${base}/v1/swap/quote`, {
+        input: { token: TOKENS[from].mint, amount: atoms, chainKey: "sol" },
+        output: { token: TOKENS[to].mint, chainKey: "sol" },
+        userAddress: user,
+        slippageBps,
+      });
+      if (!qr.ok) throw new Error(`quote failed ${qr.status}: ${(await qr.text()).slice(0, 300)}`);
+      quotes = ((await qr.json()) as { quotes: HermesQuote[] }).quotes;
+      if (!quotes?.length) throw new Error("no quotes returned");
+      requote = false;
+    }
+    const ranked = [...quotes.filter((q) => q.bestQuote), ...quotes.filter((q) => !q.bestQuote)];
+    const next = ranked.find((q) => !tried.has(q.provider.key));
+    if (!next) throw new Error(`every provider failed simulation (${[...tried].join(", ")})`);
+    best = next;
 
     // 2. Build
     const br = await pay(`${base}/v1/swap/build-tx`, { provider: best.provider.key, userAddress: user, chainKey: "sol", quoteResponse: best.providerQuote });
-    if (!br.ok) throw new Error(`build-tx failed ${br.status}: ${(await br.text()).slice(0, 300)}`);
+    if (!br.ok) { tried.add(best.provider.key); log("hermes.build_failed", { provider: best.provider.key, status: br.status }); continue; }
     const built = await br.json();
     const transaction = findTx(built);
     if (!transaction) throw new Error(`build-tx returned no transaction we recognise. Response: ${JSON.stringify(built).slice(0, 400)}`);
@@ -160,17 +171,20 @@ export async function hermesSwap(kp: Keypair, from: string, to: string, amountIn
       } else {
         signature = await conn.sendRawTransaction(tx.serialize(), { maxRetries: 3 });
       }
-      log("hermes.sent", { via: needsCosigner ? "swapio submit-tx" : "own rpc", signature });
+      log("hermes.sent", { via: needsCosigner ? "swapio submit-tx" : "own rpc", provider: best.provider.key, signature });
       await waitForConfirmation(conn, signature);
       break;
     } catch (e) {
       if (signature) throw e; // it was sent: never retry
       const why = await simulationReason(e, conn);
       log("hermes.simulation_failed", { attempt, provider: best.provider.key, why: why.text });
-      if (why.retry && attempt < 2) continue;
-      throw new Error(`swap not sent (simulation failed): ${why.text}`);
+      if (why.balance) throw new Error(`swap not sent: ${why.text}`);
+      if (why.retry && requotes < 1) { requotes++; requote = true; tried.clear(); continue; }
+      tried.add(best.provider.key);
+      if (tried.size >= 3 || attempt === 4) throw new Error(`swap not sent (simulation failed on ${[...tried].join(", ")}): ${why.text}`);
     }
   }
+  if (!signature) throw new Error("swap not sent: no provider produced a working transaction");
 
   const d = TOKENS[to].decimals;
   const result: HermesSwap = {
