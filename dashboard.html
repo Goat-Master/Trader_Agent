@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Dashboard</title>
+<style>
+  :root { --bg:#0a0a0a; --panel:#131313; --panel2:#181818; --line:#262626; --gold:#d4af37; --gold2:#f0d77a; --txt:#f2f2f2; --mut:#8c8c8c; --red:#d0725f; --green:#7fbf7f; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--txt); font: 15px/1.45 Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 24px 16px 60px; }
+  header { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; flex-wrap: wrap; margin-bottom: 18px; }
+  h1 { margin: 0; font-size: 28px; letter-spacing: -.01em; } h1 span { color: var(--gold); }
+  .muted { color: var(--mut); } .small { font-size: 13px; }
+  .grid { display: grid; gap: 14px; }
+  .g2 { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+  .g4 { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px; }
+  .card h2 { margin: 0 0 10px; font-size: 16px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .section { margin-top: 22px; } .section > h3 { margin: 0 0 10px; font-size: 13px; text-transform: uppercase; letter-spacing: .12em; color: var(--gold); }
+  .pill { font-size: 12px; font-weight: 700; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--line); color: var(--mut); text-transform: uppercase; letter-spacing: .06em; white-space: nowrap; }
+  .pill.on { color: var(--gold); border-color: rgba(212,175,55,.6); } .pill.live { color: #111; background: var(--gold); border-color: var(--gold); } .pill.off { color: var(--red); border-color: rgba(208,114,95,.5); }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 10px 0; flex-wrap: wrap; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .seg button, .btn { background: var(--panel2); color: var(--txt); border: 0; padding: 8px 14px; font: inherit; font-weight: 600; cursor: pointer; }
+  .seg button + button { border-left: 1px solid var(--line); }
+  .seg button.active { background: var(--gold); color: #111; }
+  .seg button:disabled, .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .btn { border: 1px solid var(--line); border-radius: 10px; } .btn.gold { background: var(--gold); color: #111; border-color: var(--gold); }
+  input[type=text] { background: #0e0e0e; border: 1px solid var(--line); color: var(--txt); border-radius: 10px; padding: 8px 10px; font: inherit; width: 130px; }
+  .warn { color: var(--gold2); font-size: 13px; } .err { color: var(--red); font-size: 13px; }
+  .stat .v { font-size: 24px; font-weight: 800; font-variant-numeric: tabular-nums; } .stat .k { font-size: 12px; color: var(--mut); text-transform: uppercase; letter-spacing: .08em; }
+  .pos { color: var(--green); } .neg { color: var(--red); }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th { text-align: left; color: var(--mut); font-size: 12px; text-transform: uppercase; letter-spacing: .07em; font-weight: 600; padding: 8px; border-bottom: 1px solid var(--line); }
+  td { padding: 9px 8px; border-bottom: 1px solid var(--line); vertical-align: top; font-variant-numeric: tabular-nums; }
+  tr:last-child td { border-bottom: 0; }
+  .scroll { overflow-x: auto; }
+  .tweet { border-bottom: 1px solid var(--line); padding: 10px 0; } .tweet:last-child { border-bottom: 0; }
+  .tweet .t { white-space: pre-wrap; margin: 6px 0; }
+  .log { font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--mut); max-height: 320px; overflow: auto; white-space: pre-wrap; word-break: break-word; }
+  .log b { color: var(--txt); font-weight: 600; }
+  svg { width: 100%; height: 220px; display: block; }
+  .legend { display: flex; gap: 14px; font-size: 13px; color: var(--mut); flex-wrap: wrap; } .legend i { display: inline-block; width: 12px; height: 3px; vertical-align: middle; margin-right: 6px; }
+  select { background: #0e0e0e; border: 1px solid var(--line); color: var(--txt); border-radius: 10px; padding: 8px 10px; font: inherit; }
+  .tsrow { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin: 10px 0; }
+  .banner { background: rgba(208,114,95,.12); border: 1px solid rgba(208,114,95,.5); color: var(--red); padding: 10px 14px; border-radius: 12px; margin-bottom: 14px; display: none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1 id="title">Agent <span>Dashboard</span></h1>
+      <div class="muted small" id="sub">Loading…</div>
+    </div>
+    <div class="muted small" id="updated"></div>
+  </header>
+
+  <div class="banner" id="killBanner">KILL_SWITCH is on in Railway. No swaps will run until it is set back to off.</div>
+
+  <div class="grid g2" id="controls"></div>
+  <div class="muted small" id="controlNote" style="margin-top:8px"></div>
+
+  <div class="section">
+    <div class="row" style="margin:0 0 10px">
+      <h3 style="margin:0;font-size:13px;text-transform:uppercase;letter-spacing:.12em;color:var(--gold)">Portfolio</h3>
+      <div class="seg" id="viewSeg"><button data-v="paper">Paper ledger</button><button data-v="live">Live ledger</button></div>
+    </div>
+    <div class="grid g4" id="stats"></div>
+  </div>
+
+  <div class="section card">
+    <h2>Value vs holding <span class="legend"><span><i style="background:var(--gold)"></i>Agent</span><span><i style="background:#9a9a9a"></i>Hold BTC</span><span><i style="background:#555"></i>Hold SOL</span></span></h2>
+    <div id="chart"></div>
+  </div>
+
+  <div class="section"><h3>Positions</h3><div class="card scroll" id="positions"></div></div>
+  <div class="section"><h3>Latest analysis</h3><div class="card" id="analysis"></div></div>
+
+  <div class="grid g2 section">
+    <div><h3 style="margin:0 0 10px;font-size:13px;text-transform:uppercase;letter-spacing:.12em;color:var(--gold)">Trades</h3><div class="card scroll" id="trades"></div></div>
+    <div><h3 style="margin:0 0 10px;font-size:13px;text-transform:uppercase;letter-spacing:.12em;color:var(--gold)">Tweets</h3><div class="card" id="tweets"></div></div>
+  </div>
+
+  <div class="section"><h3>Wallets</h3><div class="card scroll" id="wallets"></div></div>
+
+  <div class="section"><h3>Test swap</h3><div class="card" id="testswap"></div></div>
+
+  <div class="section"><h3>Activity</h3><div class="card"><div class="log" id="log"></div></div></div>
+</div>
+
+<script>
+var S = null, view = null, pendingLive = null, lastError = "";
+function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
+function money(v) { return v == null ? "–" : "$" + Number(v).toLocaleString(undefined, { maximumFractionDigits: 2, minimumFractionDigits: 2 }); }
+function pct(v) { if (v == null) return "–"; var n = Number(v); return '<span class="' + (n >= 0 ? "pos" : "neg") + '">' + (n >= 0 ? "+" : "") + n.toFixed(2) + "%</span>"; }
+function px(v) { return v == null ? "–" : "$" + Number(v).toLocaleString(undefined, { maximumFractionDigits: v < 10 ? 4 : 2 }); }
+function ago(t) { if (!t) return "never"; var m = Math.round((Date.now() - Date.parse(t)) / 60000); return m < 1 ? "just now" : m < 60 ? m + " min ago" : m < 1440 ? Math.round(m / 60) + " h ago" : Math.round(m / 1440) + " d ago"; }
+
+async function load() {
+  try {
+    var r = await fetch("/api/status", { cache: "no-store" });
+    S = await r.json();
+    if (!view) view = S.controls.trader.mode;
+    render();
+  } catch (e) { document.getElementById("sub").textContent = "Could not load status: " + e.message; }
+}
+
+async function setCtl(patch) {
+  lastError = "";
+  try {
+    var r = await fetch("/api/controls", { method: "POST", headers: { "content-type": "application/json", "x-dashboard": "1" }, body: JSON.stringify(patch) });
+    var j = await r.json();
+    if (!r.ok) lastError = j.error || "failed";
+  } catch (e) { lastError = e.message; }
+  pendingLive = null;
+  await load();
+}
+
+function controlCard(key, title, desc, modes) {
+  var c = S.controls[key], live = c.mode === "live", pre = key === "trader" ? S.prerequisites.liveTrading : S.prerequisites.liveTweets;
+  var dis = S.canControl ? "" : " disabled";
+  var h = '<div class="card"><h2>' + title + ' <span class="pill ' + (c.enabled ? (live ? "live" : "on") : "off") + '">' + (c.enabled ? (live ? "Live" : modes[0][1]) : "Off") + "</span></h2>";
+  h += '<div class="muted small">' + desc + "</div>";
+  h += '<div class="row"><span>Agent</span><div class="seg"><button class="' + (c.enabled ? "active" : "") + '" onclick="setCtl({' + key + ':{enabled:true}})"' + dis + '>On</button><button class="' + (!c.enabled ? "active" : "") + '" onclick="setCtl({' + key + ':{enabled:false}})"' + dis + ">Off</button></div></div>";
+  h += '<div class="row"><span>Mode</span><div class="seg">';
+  h += '<button class="' + (!live ? "active" : "") + '" onclick="setCtl({' + key + ":{mode:'" + modes[0][0] + "'}})\"" + dis + ">" + modes[0][1] + "</button>";
+  h += '<button class="' + (live ? "active" : "") + '" onclick="askLive(\'' + key + "')\"" + (S.canControl && pre.ok ? "" : " disabled") + ">Live</button></div></div>";
+  if (pendingLive === key) h += '<div class="row"><span class="warn">' + (key === "trader" ? "Real money. " : "Posts publicly on X. ") + 'Type LIVE to confirm</span><span><input type="text" id="confirm_' + key + '" autocomplete="off"> <button class="btn gold" onclick="confirmLive(\'' + key + "')\">Confirm</button> <button class=\"btn\" onclick=\"pendingLive=null;render()\">Cancel</button></span></div>";
+  if (!pre.ok) h += '<div class="warn">Live is locked. Missing in Railway: ' + esc(pre.missing.join(", ")) + "</div>";
+  return h + "</div>";
+}
+function askLive(k) { pendingLive = k; render(); var i = document.getElementById("confirm_" + k); if (i) i.focus(); }
+function confirmLive(k) { var i = document.getElementById("confirm_" + k); if (!i || i.value.trim() !== "LIVE") { lastError = "Type LIVE exactly to confirm"; render(); return; } var p = {}; p[k] = { mode: "live" }; setCtl(p); }
+
+function legName(id) { var s = S.sleeves.filter(function (x) { return x.id === id; })[0]; return s ? String(s.label).split(" (")[0] : id; }
+function nextTrigger(sig, posn) {
+  if (!sig || sig.rule == null) return '<span class="muted">Waiting for the first daily close</span>';
+  if (sig.rule === "dip") {
+    if (posn && posn.inPosition) return "Sells on a close above " + px(sig.sma5) + " (5-day average)";
+    if (!sig.aboveSma200) return "Paused: BTC is below its 200-day average (" + px(sig.sma200) + ")";
+    return "Buys when RSI(2) drops under 10 (now " + sig.rsi2 + ")";
+  }
+  if (sig.rule === "donchian20_10") {
+    if (posn && posn.inPosition) return "Sells on a close below " + px(sig.low10) + " (" + Number(sig.toSellTriggerPct).toFixed(1) + "% away)";
+    return "Buys on a close above " + px(sig.high20) + " (+" + Number(sig.toBuyTriggerPct).toFixed(1) + "% away)";
+  }
+  if (sig.rule === "sma50") return (posn && posn.inPosition ? "Sells on a close below " : "Buys on a close above ") + px(sig.sma50) + " (50-day average)";
+  return "–";
+}
+
+function chart(eq) {
+  if (!eq || eq.length < 2) return '<div class="muted small" style="padding:30px 0;text-align:center">The chart starts after two daily closes.</div>';
+  var a = eq.map(function (e) { return e.value / eq[0].value; }), b = eq.map(function (e) { return e.btc / eq[0].btc; }), s = eq.map(function (e) { return e.sol / eq[0].sol; });
+  var all = a.concat(b, s), lo = Math.min.apply(null, all), hi = Math.max.apply(null, all); if (hi - lo < 0.02) { hi += 0.01; lo -= 0.01; }
+  var W = 1000, H = 220, P = 10;
+  function line(v, col, w) { return '<polyline fill="none" stroke="' + col + '" stroke-width="' + w + '" points="' + v.map(function (y, i) { return (P + i * (W - 2 * P) / (v.length - 1)).toFixed(1) + "," + (H - P - (y - lo) / (hi - lo) * (H - 2 * P)).toFixed(1); }).join(" ") + '"/>'; }
+  var base = H - P - (1 - lo) / (hi - lo) * (H - 2 * P);
+  return '<svg viewBox="0 0 ' + W + " " + H + '" preserveAspectRatio="none"><line x1="0" x2="' + W + '" y1="' + base + '" y2="' + base + '" stroke="#2a2a2a" stroke-dasharray="4 4"/>' + line(s, "#555", 2) + line(b, "#9a9a9a", 2) + line(a, "#d4af37", 3) + "</svg>" +
+    '<div class="muted small">' + esc(eq[0].date) + " to " + esc(eq[eq.length - 1].date) + "</div>";
+}
+
+function render() {
+  var c = S.controls;
+  document.getElementById("title").innerHTML = esc(S.agentName) + " <span>Dashboard</span>";
+  document.getElementById("sub").textContent = "Strategy: " + S.sleeves.map(function (s) { return Math.round(s.weight * 100) + "% " + String(s.label).split(" (")[0]; }).join(" + ");
+  document.getElementById("updated").textContent = "Refreshed " + new Date(S.serverTime).toLocaleTimeString();
+  document.getElementById("killBanner").style.display = S.killSwitch ? "block" : "none";
+
+  document.getElementById("controls").innerHTML =
+    controlCard("trader", "Trading agent", "Follows the backtested rules once a day after the 00:00 UTC close. Paper = simulated money. Live = the real wallet.", [["paper", "Paper"]]) +
+    controlCard("tweeter", "Tweeting agent", "Turns each trade and the daily read into a post. Drafts = written and checked, never posted. Live = posts on X.", [["dry", "Drafts"]]);
+  document.getElementById("controlNote").innerHTML = (lastError ? '<span class="err">' + esc(lastError) + "</span> " : "") +
+    (S.canControl ? "Switching the trading mode keeps paper and live in separate ledgers. Turning tweets off skips new posts instead of queueing them." : '<span class="warn">Controls are disabled. Set DASHBOARD_PASSWORD in Railway Variables to turn them on.</span>');
+
+  Array.prototype.forEach.call(document.querySelectorAll("#viewSeg button"), function (b) {
+    b.className = b.dataset.v === view ? "active" : ""; b.onclick = function () { view = b.dataset.v; render(); };
+    b.disabled = !S.ledgers[b.dataset.v];
+  });
+  var L = S.ledgers[view] || S.ledgers[c.trader.mode], snap = L && L.snapshot;
+  if (!snap) {
+    document.getElementById("stats").innerHTML = '<div class="card muted">No data yet for this ledger. The trading agent fills it on its first run.</div>';
+    ["positions", "analysis", "trades"].forEach(function (id) { document.getElementById(id).innerHTML = '<span class="muted">–</span>'; });
+    document.getElementById("chart").innerHTML = chart(null);
+  } else {
+    var st = [["Value", money(snap.portfolioUsd)], ["Since start", pct(snap.changeSinceStartPct)], ["Hold BTC", pct(snap.holdingBtcSinceStartPct)], ["Hold SOL", pct(snap.holdingSolSinceStartPct)],
+      ["Max drawdown", pct(snap.maxDrawdownPct)], ["Win rate", snap.winRatePct == null ? "–" : snap.winRatePct.toFixed(0) + "%"], ["Closed trades", snap.closedTrades], ["Yield earned", money(snap.yieldEarnedUsd)]];
+    document.getElementById("stats").innerHTML = st.map(function (x) { return '<div class="card stat"><div class="k">' + x[0] + '</div><div class="v">' + x[1] + "</div></div>"; }).join("");
+    var rows = Object.keys(snap.positions).map(function (id) {
+      var p = snap.positions[id], sig = (L.signals || {})[id];
+      var nm = String(p.label).split(" (");
+      return "<tr><td><b>" + esc(nm[0]) + "</b>" + (nm[1] ? '<div class="muted small">' + esc(nm[1].replace(/\)$/, "")) + "</div>" : "") + "</td><td>" + (p.inPosition ? '<span class="pill on">In ' + esc(p.asset) + "</span>" : '<span class="pill">In USDC</span>') + "</td><td>" + money(p.valueUsd) + "</td><td>" + (p.inPosition ? px(p.entryPrice) : "–") + "</td><td>" + (p.openPnlPct == null ? "–" : pct(p.openPnlPct)) + "</td><td>" + nextTrigger(sig, p) + "</td></tr>";
+    }).join("");
+    document.getElementById("positions").innerHTML = "<table><tr><th>Leg</th><th>Status</th><th>Value</th><th>Entry</th><th>Open P&amp;L</th><th>Next trigger</th></tr>" + rows + "</table>" +
+      '<div class="muted small" style="margin-top:8px">USDC lent: ' + money(snap.usdcLent) + " (" + esc(snap.lending) + ") · last daily run: " + esc(L.lastProcessedDay || "not yet") + " · refreshed " + ago(snap.time) + "</div>";
+    document.getElementById("analysis").innerHTML = L.lastAnalysis ? "<b>" + esc(L.lastAnalysis.headline) + '</b><div class="muted" style="margin-top:6px">' + esc(L.lastAnalysis.reasoning) + '</div><div class="muted small" style="margin-top:6px">' + esc(L.lastAnalysis.date) + "</div>" : '<span class="muted">Written after the first daily close.</span>';
+    document.getElementById("trades").innerHTML = L.trades.length ? "<table><tr><th>When</th><th>Leg</th><th>Side</th><th>Price</th><th>Result</th></tr>" + L.trades.map(function (t) {
+      return "<tr><td>" + esc(t.time.slice(0, 16).replace("T", " ")) + "</td><td>" + esc(legName(t.sleeve)) + "</td><td>" + esc(t.side) + " " + esc(t.asset) + "</td><td>" + px(t.price) + "</td><td>" + (t.pnlPct == null ? "–" : pct(t.pnlPct)) + "</td></tr>";
+    }).join("") + "</table>" : '<span class="muted">No trades yet. Most days the rules say hold.</span>';
+    document.getElementById("chart").innerHTML = chart(L.equity);
+  }
+
+  var badge = { posted: "live", draft: "on", blocked: "off", error: "off", skipped: "", expired: "", pending: "on" };
+  document.getElementById("tweets").innerHTML = S.posts.length ? S.posts.map(function (p) {
+    return '<div class="tweet"><span class="pill ' + (badge[p.status] || "") + '">' + esc(p.status) + '</span> <span class="muted small">' + esc(p.kind) + " · " + ago(p.time) + (p.mode ? " · " + esc(p.mode) + " trading" : "") + "</span>" +
+      (p.final ? '<div class="t">' + esc(p.final) + "</div>" : "") + (p.reason ? '<div class="muted small">' + esc(p.reason) + "</div>" : "") + "</div>";
+  }).join("") : '<span class="muted">No posts yet.</span>';
+
+  renderWallets();
+  renderTestSwap();
+  document.getElementById("log").innerHTML = S.log.map(function (l) { return esc(l.time.slice(5, 16).replace("T", " ")) + "  <b>" + esc(l.event) + "</b>  " + esc(JSON.stringify(l.data)).slice(0, 220); }).join("\n");
+}
+
+var wBusy = false, wMsg = "";
+function short(a) { a = String(a || ""); return a.length > 12 ? a.slice(0, 4) + "…" + a.slice(-4) : a; }
+function bal(b, k) { return b && b[k] != null ? Number(b[k]).toLocaleString(undefined, { maximumFractionDigits: k === "SOL" ? 4 : 2 }) : "–"; }
+function renderWallets() {
+  var W = S.walletAdmin || { enabled: false, missing: [], wallets: [], history: [] }, el = document.getElementById("wallets");
+  var dis = (!W.enabled || !S.canControl || wBusy) ? " disabled" : "";
+  var h = '<div class="muted small">The treasury funds the other wallets. The bot creates its own trading and test wallets and keeps their keys encrypted on the server: they are never shown here. Funding is capped at ' + W.maxSol + " SOL and " + W.maxUsdc + " USDC per transfer. Sweeps always go back to the treasury.</div>";
+  if (!W.enabled) h += '<div class="warn" style="margin-top:8px">Locked. Missing in Railway: ' + esc((W.missing || []).join(", ")) + "</div>";
+  var t = W.treasury;
+  h += '<table style="margin-top:10px"><tr><th>Wallet</th><th>Role</th><th>Address</th><th>SOL</th><th>USDC</th><th>Other</th><th>Actions</th></tr>';
+  h += "<tr><td><b>Treasury</b></td><td>funding</td><td>" + (t ? esc(short(t.address)) : '<span class="muted">not set</span>') + "</td><td>" + bal(t, "SOL") + "</td><td>" + bal(t, "USDC") + "</td><td>–</td><td></td></tr>";
+  (W.wallets || []).forEach(function (w) {
+    var b = w.balances, other = b ? Object.keys(b).filter(function (k) { return k !== "SOL" && k !== "USDC" && b[k] > 0; }).map(function (k) { return k + " " + bal(b, k); }).join(", ") : "";
+    h += "<tr><td><b>" + esc(w.name) + '</b><div class="small muted">' + (w.source === "bot" ? "created by the bot" : "from Railway") + "</div></td><td>" + esc(w.role) + "</td><td>" + esc(short(w.address)) + "</td><td>" + bal(b, "SOL") + "</td><td>" + bal(b, "USDC") + "</td><td>" + (esc(other) || "–") + "</td><td>" +
+      '<input type="text" id="fs_' + esc(w.id) + '" placeholder="SOL" style="width:64px"> <input type="text" id="fu_' + esc(w.id) + '" placeholder="USDC" style="width:70px"> ' +
+      '<button class="btn" onclick="walletAct(\'fund\',\'' + esc(w.id) + "')\"" + dis + ">Fund</button> " +
+      '<button class="btn" onclick="walletAct(\'sweep\',\'' + esc(w.id) + "')\"" + dis + ">Sweep back</button>" +
+      (w.source === "bot" && w.role === "test" ? ' <label class="small muted"><input type="checkbox" id="rm_' + esc(w.id) + '"> delete after sweep</label>' : "") + "</td></tr>";
+  });
+  h += "</table>";
+  h += '<div class="tsrow"><input type="text" id="nw_name" placeholder="New wallet name" style="width:180px"><select id="nw_role"><option value="test">test wallet</option><option value="trading">trading wallet</option></select>' +
+    '<button class="btn gold" onclick="walletAct(\'create\')"' + dis + ">Create wallet</button>" +
+    '<label class="small muted"><input type="checkbox" id="w_ok"> funding and sweeps move real funds</label></div>';
+  if (wMsg) h += '<div class="' + (wMsg.indexOf("OK") === 0 ? "warn" : "err") + '">' + esc(wMsg) + "</div>";
+  if ((W.history || []).length) h += '<table style="margin-top:8px"><tr><th>When</th><th>Action</th><th>Wallet</th><th>Amount</th><th>Result</th></tr>' + W.history.map(function (r) {
+    return "<tr><td>" + esc(r.time.slice(5, 16).replace("T", " ")) + "</td><td>" + esc(r.kind) + "</td><td>" + esc(r.walletName) + "</td><td>" + (r.sol ? esc(r.sol) + " SOL " : "") + (r.usdc ? esc(r.usdc) + " USDC" : "") + "</td><td>" +
+      (r.status === "ok" ? (r.signature ? '<a style="color:var(--gold)" target="_blank" rel="noopener" href="https://solscan.io/tx/' + esc(r.signature) + '">tx</a>' : '<span class="pill on">ok</span>') : '<span class="pill off">failed</span> <span class="small muted">' + esc(r.error) + "</span>") + "</td></tr>";
+  }).join("") + "</table>";
+  el.innerHTML = h;
+}
+async function walletAct(action, id) {
+  var body = {};
+  if (action === "create") body = { name: document.getElementById("nw_name").value, role: document.getElementById("nw_role").value };
+  else {
+    if (!document.getElementById("w_ok").checked) { wMsg = "Tick 'funding and sweeps move real funds' to confirm"; renderWallets(); return; }
+    body.id = id;
+    if (action === "fund") { body.sol = Number(document.getElementById("fs_" + id).value || 0); body.usdc = Number(document.getElementById("fu_" + id).value || 0); }
+    if (action === "sweep") { var rm = document.getElementById("rm_" + id); body.remove = !!(rm && rm.checked); }
+  }
+  wBusy = true; wMsg = ""; renderWallets();
+  try {
+    var r = await fetch("/api/wallets/" + action, { method: "POST", headers: { "content-type": "application/json", "x-dashboard": "1" }, body: JSON.stringify(body) });
+    var j = await r.json();
+    wMsg = r.ok ? "OK: " + action + (j.address ? " " + short(j.address) : "") + (j.signature ? " (tx " + short(j.signature) + ")" : "") : (j.error || "failed");
+  } catch (e) { wMsg = e.message; }
+  wBusy = false; await load();
+}
+
+var tsBusy = false, tsMsg = "", tsForm = null;
+function renderTestSwap() {
+  var T = S.testSwap, el = document.getElementById("testswap");
+  var keep = tsForm || { walletId: T.wallets[0] ? T.wallets[0].id : "", from: "USDC", to: "SOL", amountUsd: Math.min(2, T.maxUsd) };
+  var h = '<div class="muted small">One real swap through the Swap.io Agent API from the chosen wallet. Uses real funds (max $' + T.maxUsd + "). For testing the live path before going live.</div>";
+  if (!T.enabled) h += '<div class="warn" style="margin-top:8px">Locked. Set ALLOW_TEST_SWAPS=yes in Railway Variables to use it.</div>';
+  if (!T.wallets.length) h += '<div class="warn" style="margin-top:8px">No wallets configured. Add TEST_WALLET_1 (and optionally TEST_WALLET_1_NAME) in Railway Variables.</div>';
+  var opts = function (arr, sel, lab) { return arr.map(function (x) { var v = typeof x === "string" ? x : x.id; return '<option value="' + esc(v) + '"' + (v === sel ? " selected" : "") + ">" + esc(lab ? lab(x) : v) + "</option>"; }).join(""); };
+  var dis = (!T.enabled || !T.wallets.length || !S.canControl || tsBusy) ? " disabled" : "";
+  h += '<div class="tsrow"><select id="ts_wallet">' + opts(T.wallets, keep.walletId, function (w) { return w.name + " (" + String(w.address).slice(0, 4) + "…" + String(w.address).slice(-4) + ")"; }) + "</select>" +
+    '<select id="ts_from">' + opts(T.tokens, keep.from) + '</select><span class="muted">to</span><select id="ts_to">' + opts(T.tokens, keep.to) + "</select>" +
+    '<span class="muted">$</span><input type="text" id="ts_amt" value="' + esc(keep.amountUsd) + '" style="width:70px">' +
+    '<label class="small muted"><input type="checkbox" id="ts_ok"> uses real funds</label>' +
+    '<button class="btn gold" onclick="runTest()"' + dis + ">" + (tsBusy ? "Running…" : "Run test swap") + "</button></div>";
+  if (tsMsg) h += '<div class="' + (tsMsg.indexOf("OK") === 0 ? "warn" : "err") + '">' + esc(tsMsg) + "</div>";
+  h += T.history.length ? '<table style="margin-top:10px"><tr><th>When</th><th>Wallet</th><th>Swap</th><th>Result</th><th>Route / quotes</th></tr>' + T.history.map(function (r) {
+    var q = (r.quotes || []).map(function (x) { return (x.best ? "<b>" : "") + esc(x.provider) + (x.outAmount == null ? "" : " " + Number(x.outAmount).toPrecision(6)) + (x.best ? "</b>" : ""); }).join("<br>");
+    return "<tr><td>" + esc(r.time.slice(5, 16).replace("T", " ")) + "</td><td>" + esc(r.walletName) + "</td><td>$" + esc(r.amountUsd) + " " + esc(r.from) + " → " + esc(r.to) + "</td><td>" +
+      (r.status === "ok" ? '<span class="pill on">ok</span> <a style="color:var(--gold)" target="_blank" rel="noopener" href="' + esc(r.solscan) + '">tx</a>' : '<span class="pill off">failed</span><div class="small muted">' + esc(r.error) + "</div>") +
+      '<div class="small muted">' + Math.round(r.durationMs / 100) / 10 + "s" + (r.apiCostUsdc != null ? " · API $" + r.apiCostUsdc : "") + "</div></td><td class=\"small\">" + (q || "–") + "</td></tr>";
+  }).join("") + "</table>" : '<div class="muted small" style="margin-top:8px">No test swaps yet.</div>';
+  el.innerHTML = h;
+}
+async function runTest() {
+  var p = { walletId: document.getElementById("ts_wallet").value, from: document.getElementById("ts_from").value, to: document.getElementById("ts_to").value, amountUsd: Number(document.getElementById("ts_amt").value) };
+  tsForm = p;
+  if (!document.getElementById("ts_ok").checked) { tsMsg = "Tick 'uses real funds' to confirm"; renderTestSwap(); return; }
+  tsBusy = true; tsMsg = ""; renderTestSwap();
+  try {
+    var r = await fetch("/api/test-swap", { method: "POST", headers: { "content-type": "application/json", "x-dashboard": "1" }, body: JSON.stringify(p) });
+    var j = await r.json();
+    tsMsg = r.ok ? "OK: routed via " + j.provider + " in " + Math.round(j.durationMs / 100) / 10 + "s" : (j.error || "failed");
+  } catch (e) { tsMsg = e.message; }
+  tsBusy = false; await load();
+}
+
+load(); setInterval(function () { if (!pendingLive && !tsBusy && !wBusy) load(); }, 30000);
+</script>
+</body>
+</html>
