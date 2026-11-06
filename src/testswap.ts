@@ -19,6 +19,14 @@ const file = () => join(CONFIG.dataDir, "testswaps.json");
 export const loadTestSwaps = (): TestSwapRecord[] => readJson<TestSwapRecord[]>(file(), []);
 const save = (r: TestSwapRecord[]) => writeJsonAtomic(file(), r.slice(-100));
 
+// Wipe the test swap history (the swaps themselves stay on-chain and on Solscan; daily backups keep older copies)
+export function clearTestSwaps() {
+  if (busy) throw new Error("a test swap is running: wait for it to finish");
+  const n = loadTestSwaps().length;
+  save([]);
+  return { cleared: n };
+}
+
 export const testSwapStatus = () => ({
   enabled: process.env.ALLOW_TEST_SWAPS === "yes",
   maxUsd: CONFIG.testSwapMaxUsd,

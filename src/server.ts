@@ -6,7 +6,7 @@ import { loadControls, setControls, prerequisites, type Mode } from "./runtime.j
 import { loadState, stateExists, loadOutbox, tailLog, log } from "./store.js";
 import { publicWallets } from "./wallets.js";
 import { storageProblem, backupInfo, exportBundle, restoreBundle } from "./persist.js";
-import { runTestSwap, loadTestSwaps, testSwapStatus } from "./testswap.js";
+import { runTestSwap, loadTestSwaps, testSwapStatus, clearTestSwaps } from "./testswap.js";
 import { walletOverview, createWallet, fundWallet, sweepWallet, sweepMany, clearWalletCache } from "./transfers.js";
 
 // DASHBOARD
@@ -99,6 +99,13 @@ export function startServer() {
         else if (action === "sweep-many") out = await sweepMany(Array.isArray(p.ids) ? p.ids : [], Boolean(p.remove));
         else return json(res, 404, { error: "unknown action" });
         clearWalletCache();
+        return json(res, 200, out);
+      }
+      if (req.method === "POST" && url.pathname === "/api/test-swap/clear") {
+        if (!CONFIG.dashboardPassword) return json(res, 403, { error: "needs DASHBOARD_PASSWORD" });
+        if (!authed(req) || req.headers["x-dashboard"] !== "1") return json(res, 403, { error: "forbidden" });
+        const out = clearTestSwaps();
+        log("testswap.history_cleared", out);
         return json(res, 200, out);
       }
       if (req.method === "POST" && url.pathname === "/api/test-swap") {
