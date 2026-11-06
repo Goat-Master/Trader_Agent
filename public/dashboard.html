@@ -252,6 +252,8 @@ function renderWallets() {
   var h = '<div class="muted small">The treasury funds the other wallets. The bot creates its own trading and test wallets and keeps their keys encrypted on the server: they are never shown here. Funding is capped at ' + W.maxSol + " SOL and " + W.maxUsdc + " USDC per transfer. Sweeps always go back to the treasury.</div>";
   if (!W.enabled) h += '<div class="warn" style="margin-top:8px">Locked. Missing in Railway: ' + esc((W.missing || []).join(", ")) + "</div>";
   var t = W.treasury;
+  var errs = [t && t.balanceError].concat((W.wallets || []).map(function (w) { return w.balanceError; })).filter(Boolean);
+  if (errs.length) h += '<div class="err" style="margin-top:8px">Balances could not be loaded: ' + esc(errs[0]) + "</div>";
   h += '<table style="margin-top:10px"><tr><th>Wallet</th><th>Role</th><th>Address</th><th>SOL</th><th>USDC</th><th>Other</th><th>Actions</th></tr>';
   h += "<tr><td><b>Treasury</b></td><td>funding</td><td>" + (t ? esc(short(t.address)) : '<span class="muted">not set</span>') + "</td><td>" + bal(t, "SOL") + "</td><td>" + bal(t, "USDC") + "</td><td>–</td><td></td></tr>";
   (W.wallets || []).forEach(function (w) {
