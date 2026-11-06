@@ -61,7 +61,11 @@ async function x402Fetch(kp: Keypair) {
     if ((terms.x402Version ?? 1) !== 1) throw new Error(`x402 version ${terms.x402Version} is not supported yet`);
     const header = await pay(req, 1);
     const paid = await fetch(url, { ...init, headers: { ...init.headers, "X-PAYMENT": header } });
-    if (paid.status === 402) throw new Error(`payment rejected: ${(await paid.text()).slice(0, 300)}`);
+    if (paid.status === 402) {
+      const body = await paid.text();
+      if (/simulation_failed|insufficient/i.test(body)) throw new Error("this wallet can't pay the Swap.io API fee: it needs some USDC (a few cents covers the API, plus the amount you swap)");
+      throw new Error(`payment rejected: ${body.slice(0, 300)}`);
+    }
     return paid;
   };
   return Object.assign(fetchPaid, { spent: () => spent });
@@ -72,6 +76,45 @@ const outAmountOf = (q: HermesQuote, decimals: number): number | null => {
   return raw == null ? null : Number(raw) / 10 ** decimals;
 };
 
+// The serialized transaction can sit under different names (transaction, tx, swapTransaction, data...) or one level down.
+const TX_KEYS = ["transaction", "serializedTransaction", "swapTransaction", "tx", "txData", "data", "rawTransaction", "base64"];
+function findTx(o: any, depth = 0): string | null {
+  if (typeof o === "string") return o.length > 100 ? o : null;
+  if (!o || typeof o !== "object" || depth > 3) return null;
+  if (Array.isArray(o)) { for (const x of o) { const t = findTx(x, depth + 1); if (t) return t; } return null; }
+  for (const k of TX_KEYS) if (k in o) { const t = findTx(o[k], depth + 1); if (t) return t; }
+  for (const k of ["transactions", "result", "response", "build"]) if (k in o) { const t = findTx(o[k], depth + 1); if (t) return t; }
+  return null;
+}
+
+// Turn a long simulation log into one readable line. Known Solana and Jupiter error codes get plain names.
+const KNOWN: [RegExp, string, boolean, boolean?][] = [
+  [/0x1771|6001|SlippageToleranceExceeded|slippage/i, "price moved past the slippage limit (stale quote)", true],
+  [/BlockhashNotFound|Blockhash not found|block height exceeded/i, "quote expired before it was sent", true],
+  [/insufficient lamports|0x1\b|insufficient funds|InsufficientFundsForFee|prior credit/i, "not enough balance: check the token being sold, plus about 0.01 SOL for fees and new token accounts", false, true],
+  [/AccountNotFound|could not find account/i, "a token account is missing in the wallet (it needs a little SOL to create one)", false],
+];
+async function simulationReason(e: any, conn: any): Promise<{ text: string; retry: boolean; balance?: boolean }> {
+  let logs: string[] = e?.logs ?? [];
+  if (!logs.length && typeof e?.getLogs === "function") { try { logs = await e.getLogs(conn); } catch {} }
+  const all = `${e?.message ?? e} ${e?.transactionError?.message ?? ""} ${JSON.stringify(e?.transactionError ?? "")} ${logs.join(" ")}`;
+  for (const [re, text, retry, balance] of KNOWN) if (re.test(all)) return { text, retry, balance };
+  const errLines = logs.filter((l) => /failed|error|Error/.test(l)).slice(-3);
+  return { text: (errLines.length ? errLines.join(" | ") : String(e?.message ?? e)).slice(0, 400), retry: false };
+}
+
+// Poll our own RPC (free) instead of the paid status endpoint. About 75 seconds, the life of a Solana blockhash.
+async function waitForConfirmation(conn: any, signature: string) {
+  for (let i = 0; i < 38; i++) {
+    const { value } = await conn.getSignatureStatuses([signature], { searchTransactionHistory: false });
+    const st = value?.[0];
+    if (st?.err) throw new Error(`transaction failed on-chain: ${JSON.stringify(st.err)} (${signature})`);
+    if (st && (st.confirmationStatus === "confirmed" || st.confirmationStatus === "finalized")) return;
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+  throw new Error(`sent but not confirmed after 75 seconds, check Solscan before trying again: ${signature}`);
+}
+
 // Full swap of `amountIn` units of `from` into `to`, signed by `kp`.
 export async function hermesSwap(kp: Keypair, from: string, to: string, amountIn: number, slippageBps = CONFIG.limits.maxSlippageBps): Promise<HermesSwap> {
   const base = (CONFIG.swapioApiUrl || "https://hermes.swap.io").replace(/\/$/, "");
@@ -79,32 +122,79 @@ export async function hermesSwap(kp: Keypair, from: string, to: string, amountIn
   const user = kp.publicKey.toString();
   const atoms = String(Math.floor(amountIn * 10 ** TOKENS[from].decimals));
 
-  // 1. Quote
-  const qr = await pay(`${base}/v1/swap/quote`, {
-    input: { token: TOKENS[from].mint, amount: atoms, chainKey: "sol" },
-    output: { token: TOKENS[to].mint, chainKey: "sol" },
-    userAddress: user,
-    slippageBps,
-  });
-  if (!qr.ok) throw new Error(`quote failed ${qr.status}: ${(await qr.text()).slice(0, 300)}`);
-  const { quotes } = (await qr.json()) as { quotes: HermesQuote[] };
-  if (!quotes?.length) throw new Error("no quotes returned");
-  const best = quotes.find((q) => q.bestQuote) ?? quotes[0];
-
-  // 2. Build
-  const br = await pay(`${base}/v1/swap/build-tx`, { provider: best.provider.key, userAddress: user, chainKey: "sol", quoteResponse: best.providerQuote });
-  if (!br.ok) throw new Error(`build-tx failed ${br.status}: ${(await br.text()).slice(0, 300)}`);
-  const { transaction } = (await br.json()) as { transaction: string };
-
-  // 3. Sign and send with our own RPC (skips the paid submit-tx call)
   const { Connection, VersionedTransaction } = await import("@solana/web3.js");
-  const tx = VersionedTransaction.deserialize(Buffer.from(transaction, "base64"));
-  tx.sign([kp]);
   const conn = new Connection(CONFIG.solanaRpc, "confirmed");
-  const latest = await conn.getLatestBlockhash();
-  const signature = await conn.sendRawTransaction(tx.serialize(), { maxRetries: 3 });
-  const conf = await conn.confirmTransaction({ signature, ...latest }, "confirmed");
-  if (conf.value.err) throw new Error(`transaction failed on-chain: ${JSON.stringify(conf.value.err)} (${signature})`);
+
+  // Quote, build, sign, send. A failed simulation means nothing was sent, so a stale quote is retried once with a fresh one.
+  // A failed simulation means nothing was sent, so it is safe to try again:
+  //   stale quote  -> fresh quote, once
+  //   route error  -> next provider, from a fresh quote, up to 3 providers
+  let quotes: HermesQuote[] = [], best!: HermesQuote, signature = "";
+  const tried = new Set<string>();
+  let requote = true, requotes = 0;
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    // 1. Quote
+    if (requote) {
+      const qr = await pay(`${base}/v1/swap/quote`, {
+        input: { token: TOKENS[from].mint, amount: atoms, chainKey: "sol" },
+        output: { token: TOKENS[to].mint, chainKey: "sol" },
+        userAddress: user,
+        slippageBps,
+      });
+      if (!qr.ok) throw new Error(`quote failed ${qr.status}: ${(await qr.text()).slice(0, 300)}`);
+      quotes = ((await qr.json()) as { quotes: HermesQuote[] }).quotes;
+      if (!quotes?.length) throw new Error("no quotes returned");
+      requote = false;
+    }
+    const ranked = [...quotes.filter((q) => q.bestQuote), ...quotes.filter((q) => !q.bestQuote)];
+    const next = ranked.find((q) => !tried.has(q.provider.key));
+    if (!next) throw new Error(`every provider failed simulation (${[...tried].join(", ")})`);
+    best = next;
+
+    // 2. Build
+    const br = await pay(`${base}/v1/swap/build-tx`, { provider: best.provider.key, userAddress: user, chainKey: "sol", quoteResponse: best.providerQuote });
+    if (!br.ok) { tried.add(best.provider.key); log("hermes.build_failed", { provider: best.provider.key, status: br.status }); continue; }
+    const built = await br.json();
+    const transaction = findTx(built);
+    if (!transaction) throw new Error(`build-tx returned no transaction we recognise. Response: ${JSON.stringify(built).slice(0, 400)}`);
+
+    // 3. Sign, then send with our own RPC, or through Swap.io submit-tx when a co-signer is needed
+    let tx: InstanceType<typeof VersionedTransaction>;
+    try { tx = VersionedTransaction.deserialize(Buffer.from(transaction, "base64")); }
+    catch { const { base58Decode } = await import("./wallets.js"); tx = VersionedTransaction.deserialize(base58Decode(transaction)); }
+    tx.sign([kp]);
+    // If another signer is still missing (Swap.io's gas sponsor as fee payer), only Swap.io can broadcast it: use submit-tx.
+    const needsCosigner = tx.signatures.some((sig) => sig.every((b) => b === 0));
+    const signedB64 = Buffer.from(tx.serialize()).toString("base64");
+    try {
+      if (needsCosigner) {
+        const sr = await pay(`${base}/v1/swap/submit-tx`, { signedTransaction: signedB64, provider: best.provider.key, chainKey: "sol" });
+        const sub = (await sr.json().catch(() => ({}))) as { transactionHash?: string; status?: string; errorMessage?: string; errorCode?: string };
+        if (!sr.ok || sub.status === "failed" || !sub.transactionHash) throw new Error(`submit-tx ${sr.status}: ${sub.errorMessage || sub.errorCode || JSON.stringify(sub).slice(0, 300)}`);
+        signature = sub.transactionHash;
+      } else {
+        signature = await conn.sendRawTransaction(tx.serialize(), { maxRetries: 3 });
+      }
+      log("hermes.sent", { via: needsCosigner ? "swapio submit-tx" : "own rpc", provider: best.provider.key, signature });
+      await waitForConfirmation(conn, signature);
+      break;
+    } catch (e) {
+      if (signature) throw e; // it was sent: never retry
+      let why = await simulationReason(e, conn);
+      // Empty logs = rejected before any program ran: almost always no SOL to pay the network fee
+      if (!why.balance && !((e as any)?.logs?.length)) {
+        const lamports = await conn.getBalance(kp.publicKey).catch(() => null);
+        if (lamports != null && lamports < 5_000_000) why = { text: `the wallet has ${(lamports / 1e9).toFixed(4)} SOL: it needs about 0.01 SOL for network fees and new token accounts`, retry: false, balance: true };
+      }
+      log("hermes.simulation_failed", { attempt, provider: best.provider.key, why: why.text });
+      if (why.balance) throw new Error(`swap not sent: ${why.text}`);
+      if (why.retry && requotes < 1) { requotes++; requote = true; tried.clear(); continue; }
+      tried.add(best.provider.key);
+      requote = true; // quotes are short-lived (Swap.io docs): every new attempt starts from a fresh quote
+      if (tried.size >= 3 || attempt === 4) throw new Error(`swap not sent (simulation failed on ${[...tried].join(", ")}): ${why.text}`);
+    }
+  }
+  if (!signature) throw new Error("swap not sent: no provider produced a working transaction");
 
   const d = TOKENS[to].decimals;
   const result: HermesSwap = {
