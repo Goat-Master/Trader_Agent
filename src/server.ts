@@ -7,7 +7,7 @@ import { loadState, stateExists, loadOutbox, tailLog, log } from "./store.js";
 import { publicWallets } from "./wallets.js";
 import { storageProblem, backupInfo, exportBundle, restoreBundle } from "./persist.js";
 import { runTestSwap, loadTestSwaps, testSwapStatus } from "./testswap.js";
-import { walletOverview, createWallet, fundWallet, sweepWallet, clearWalletCache } from "./transfers.js";
+import { walletOverview, createWallet, fundWallet, sweepWallet, sweepMany, clearWalletCache } from "./transfers.js";
 
 // DASHBOARD
 // GET  /             the page
@@ -96,6 +96,7 @@ export function startServer() {
         if (action === "create") out = await createWallet(String(p.name || ""), p.role === "trading" ? "trading" : "test");
         else if (action === "fund") out = await fundWallet(String(p.id), Number(p.sol || 0), Number(p.usdc || 0));
         else if (action === "sweep") out = await sweepWallet(String(p.id), Boolean(p.remove));
+        else if (action === "sweep-many") out = await sweepMany(Array.isArray(p.ids) ? p.ids : [], Boolean(p.remove));
         else return json(res, 404, { error: "unknown action" });
         clearWalletCache();
         return json(res, 200, out);

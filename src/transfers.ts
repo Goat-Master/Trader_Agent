@@ -94,17 +94,71 @@ export async function sweepWallet(id: string, remove = false) {
       const b = await balancesOf(kp.publicKey.toBase58());
       const others = Object.entries(b).filter(([s, v]) => s !== "SOL" && s !== "USDC" && v > 0).map(([s]) => s);
       if (others.length) throw new Error(`swap ${others.join(", ")} back to USDC first (test swap panel), then sweep`);
-      const sol = Math.max(0, Math.floor((b.SOL - 0.003) * 1e9) / 1e9); // leave enough for this transaction's fee and the token account rent refund
-      rec.usdc = b.USDC; rec.sol = sol;
-      if (b.USDC <= 0 && sol <= 0) throw new Error("nothing to sweep");
-      rec.signature = await send(kp, treasury, sol, b.USDC);
-      rec.status = "ok";
-      if (remove && w.source === "bot") removeWallet(id);
+      if (remove && w.source === "bot") {
+        // Deleting: empty the wallet completely (all USDC, close its token accounts, all SOL) so nothing is stranded
+        const r = await closeOut(kp, treasury);
+        rec.usdc = r.usdc; rec.sol = r.sol; rec.signature = r.signature;
+        rec.status = "ok";
+        removeWallet(id);
+      } else {
+        const sol = Math.max(0, Math.floor((b.SOL - 0.003) * 1e9) / 1e9); // leave enough for this transaction's fee and the token account rent refund
+        rec.usdc = b.USDC; rec.sol = sol;
+        if (b.USDC <= 0 && sol <= 0) throw new Error("nothing to sweep");
+        rec.signature = await send(kp, treasury, sol, b.USDC);
+        rec.status = "ok";
+      }
     } catch (e) { rec.error = (e as Error).message.slice(0, 300); }
     record(rec);
     if (rec.status !== "ok") throw new Error(rec.error);
     return rec;
   });
+}
+
+// ---------- sweep several wallets, one after another ----------
+export async function sweepMany(ids: string[], remove = false) {
+  if (!Array.isArray(ids) || !ids.length) throw new Error("select at least one wallet");
+  if (ids.length > 20) throw new Error("select at most 20 wallets at a time");
+  const results: { id: string; name: string; status: "ok" | "failed"; signature?: string; error?: string; removed?: boolean }[] = [];
+  for (const id of [...new Set(ids.map(String))]) {
+    const name = listWallets().find((x) => x.id === id)?.name ?? id;
+    try {
+      const r = await sweepWallet(id, remove);
+      results.push({ id, name, status: "ok", signature: r.signature, removed: remove && !listWallets().some((x) => x.id === id) });
+    } catch (e) { results.push({ id, name, status: "failed", error: (e as Error).message.slice(0, 200) }); }
+  }
+  return { results, ok: results.filter((r) => r.status === "ok").length, failed: results.filter((r) => r.status === "failed").length };
+}
+
+// Empty a wallet completely before deleting it: send all USDC, close every token account (their rent goes
+// to the treasury too) and send all SOL minus the fee. Leaves 0 SOL, so the wallet can be forgotten safely.
+async function closeOut(from: import("@solana/web3.js").Keypair, to: import("@solana/web3.js").PublicKey) {
+  const web3 = await import("@solana/web3.js");
+  const spl = await import("@solana/spl-token");
+  const conn = new web3.Connection(CONFIG.solanaRpc, "confirmed");
+  const usdcMint = new web3.PublicKey(TOKENS.USDC.mint);
+  const dstAta = spl.getAssociatedTokenAddressSync(usdcMint, to);
+  const accounts = await conn.getParsedTokenAccountsByOwner(from.publicKey, { programId: spl.TOKEN_PROGRAM_ID });
+  const tx = new web3.Transaction();
+  let usdcAtoms = 0n, needsDstAta = false;
+  for (const a of accounts.value) {
+    const info: any = a.account.data.parsed.info;
+    const atoms = BigInt(info.tokenAmount.amount);
+    if (atoms > 0n) {
+      if (info.mint !== TOKENS.USDC.mint) throw new Error("the wallet still holds tokens other than USDC: swap them back to USDC first");
+      if (!(await conn.getAccountInfo(dstAta))) { needsDstAta = true; tx.add(spl.createAssociatedTokenAccountIdempotentInstruction(from.publicKey, dstAta, to, usdcMint)); }
+      tx.add(spl.createTransferCheckedInstruction(a.pubkey, usdcMint, dstAta, from.publicKey, atoms, 6));
+      usdcAtoms += atoms;
+    }
+    tx.add(spl.createCloseAccountInstruction(a.pubkey, to, from.publicKey));
+  }
+  const lamports = await conn.getBalance(from.publicKey);
+  const rent = needsDstAta ? await conn.getMinimumBalanceForRentExemption(165) : 0;
+  const solOut = lamports - 5000 - rent;
+  if (solOut > 0) tx.add(web3.SystemProgram.transfer({ fromPubkey: from.publicKey, toPubkey: to, lamports: solOut }));
+  if (!tx.instructions.length) return { signature: undefined, sol: 0, usdc: 0 }; // already empty: nothing to move
+  if (lamports < 5000) throw new Error("the wallet has no SOL to pay the fee for emptying it: send it 0.001 SOL first");
+  const signature = await web3.sendAndConfirmTransaction(conn, tx, [from], { commitment: "confirmed" });
+  return { signature, sol: Math.max(0, solOut) / 1e9, usdc: Number(usdcAtoms) / 1e6 };
 }
 
 // One transaction: optional SOL transfer + optional USDC transfer (creates the recipient's USDC account if needed)
