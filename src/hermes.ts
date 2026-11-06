@@ -125,12 +125,24 @@ export async function hermesSwap(kp: Keypair, from: string, to: string, amountIn
   const { Connection, VersionedTransaction } = await import("@solana/web3.js");
   const conn = new Connection(CONFIG.solanaRpc, "confirmed");
 
+  // Preflight: a wallet short on SOL fails inside the swap programs with cryptic codes, so check first.
+  // SOL covers the network fee plus temporary token accounts (about 0.002 each, mostly refunded).
+  const MIN_SOL = 0.006;
+  try {
+    const { balancesOf } = await import("./market.js");
+    const b = await balancesOf(user);
+    const needSol = MIN_SOL + (from === "SOL" ? amountIn : 0);
+    if (b.SOL < needSol) throw new Error(`swap not sent: the wallet has ${b.SOL.toFixed(4)} SOL and needs at least ${needSol.toFixed(4)} (${from === "SOL" ? "the amount + " : ""}${MIN_SOL} for fees and temporary accounts)`);
+    if (from !== "SOL" && b[from] < amountIn) throw new Error(`swap not sent: the wallet has ${b[from]} ${from}, less than the ${amountIn} being sold`);
+    if (from === "USDC" && b.USDC < amountIn + 0.02) throw new Error(`swap not sent: the wallet needs ${amountIn} USDC to sell plus about 0.02 USDC for the Swap.io API calls (has ${b.USDC})`);
+  } catch (e) { if (/^swap not sent/.test((e as Error).message)) throw e; /* balance lookup failed: carry on, the swap will report its own error */ }
+
   // Quote, build, sign, send. A failed simulation means nothing was sent, so a stale quote is retried once with a fresh one.
   // A failed simulation means nothing was sent, so it is safe to try again:
   //   stale quote  -> fresh quote, once
   //   route error  -> next provider, from a fresh quote, up to 3 providers
   let quotes: HermesQuote[] = [], best!: HermesQuote, signature = "";
-  const tried = new Set<string>();
+  const tried = new Set<string>(), reasons: string[] = [];
   let requote = true, requotes = 0;
   for (let attempt = 1; attempt <= 4; attempt++) {
     // 1. Quote
@@ -190,8 +202,9 @@ export async function hermesSwap(kp: Keypair, from: string, to: string, amountIn
       if (why.balance) throw new Error(`swap not sent: ${why.text}`);
       if (why.retry && requotes < 1) { requotes++; requote = true; tried.clear(); continue; }
       tried.add(best.provider.key);
+      reasons.push(`${best.provider.key}: ${why.text.slice(0, 160)}`);
       requote = true; // quotes are short-lived (Swap.io docs): every new attempt starts from a fresh quote
-      if (tried.size >= 3 || attempt === 4) throw new Error(`swap not sent (simulation failed on ${[...tried].join(", ")}): ${why.text}`);
+      if (tried.size >= 3 || attempt === 4) throw new Error(`swap not sent, every route failed simulation. ${reasons.join(" || ")}`);
     }
   }
   if (!signature) throw new Error("swap not sent: no provider produced a working transaction");
