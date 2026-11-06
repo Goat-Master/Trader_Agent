@@ -243,7 +243,26 @@ async function restoreBackup() {
   await load();
 }
 
-var wBusy = false, wMsg = "";
+var wBusy = false, wMsg = "", wSel = {};
+function selAll(on) { (S.walletAdmin && S.walletAdmin.wallets || []).forEach(function (w) { wSel[w.id] = on; }); renderWallets(); }
+async function sweepSelected() {
+  var ids = Object.keys(wSel).filter(function (k) { return wSel[k]; });
+  if (!ids.length) { wMsg = "Select at least one wallet"; renderWallets(); return; }
+  if (!document.getElementById("w_ok").checked) { wMsg = "Tick 'funding and sweeps move real funds' to confirm"; renderWallets(); return; }
+  var remove = document.getElementById("rm_sel").checked;
+  if (remove && !confirm("Sweep " + ids.length + " wallet(s) back to the treasury and delete the bot test wallets among them? Deleted wallets cannot be recovered.")) return;
+  wBusy = true; wMsg = "Sweeping " + ids.length + " wallet(s), one at a time..."; renderWallets();
+  try {
+    var r = await fetch("/api/wallets/sweep-many", { method: "POST", headers: { "content-type": "application/json", "x-dashboard": "1" }, body: JSON.stringify({ ids: ids, remove: remove }) });
+    var j = await r.json();
+    if (!r.ok) wMsg = j.error || "failed";
+    else {
+      wMsg = (j.failed ? "" : "OK: ") + j.ok + " swept, " + j.failed + " failed. " + j.results.map(function (x) { return x.name + ": " + (x.status === "ok" ? (x.removed ? "swept and deleted" : "swept") : x.error); }).join(" | ");
+      j.results.forEach(function (x) { if (x.status === "ok") delete wSel[x.id]; });
+    }
+  } catch (e) { wMsg = e.message; }
+  wBusy = false; await load();
+}
 function short(a) { a = String(a || ""); return a.length > 12 ? a.slice(0, 4) + "…" + a.slice(-4) : a; }
 function bal(b, k) { return b && b[k] != null ? Number(b[k]).toLocaleString(undefined, { maximumFractionDigits: k === "SOL" ? 4 : 2 }) : "–"; }
 function renderWallets() {
@@ -254,17 +273,19 @@ function renderWallets() {
   var t = W.treasury;
   var errs = [t && t.balanceError].concat((W.wallets || []).map(function (w) { return w.balanceError; })).filter(Boolean);
   if (errs.length) h += '<div class="err" style="margin-top:8px">Balances could not be loaded: ' + esc(errs[0]) + "</div>";
-  h += '<table style="margin-top:10px"><tr><th>Wallet</th><th>Role</th><th>Address</th><th>SOL</th><th>USDC</th><th>Other</th><th>Actions</th></tr>';
-  h += "<tr><td><b>Treasury</b></td><td>funding</td><td>" + (t ? esc(short(t.address)) : '<span class="muted">not set</span>') + "</td><td>" + bal(t, "SOL") + "</td><td>" + bal(t, "USDC") + "</td><td>–</td><td></td></tr>";
+  h += '<table style="margin-top:10px"><tr><th><input type="checkbox" title="Select all" onclick="selAll(this.checked)"' + dis + '></th><th>Wallet</th><th>Role</th><th>Address</th><th>SOL</th><th>USDC</th><th>Other</th><th>Actions</th></tr>';
+  h += "<tr><td></td><td><b>Treasury</b></td><td>funding</td><td>" + (t ? esc(short(t.address)) : '<span class="muted">not set</span>') + "</td><td>" + bal(t, "SOL") + "</td><td>" + bal(t, "USDC") + "</td><td>–</td><td></td></tr>";
   (W.wallets || []).forEach(function (w) {
     var b = w.balances, other = b ? Object.keys(b).filter(function (k) { return k !== "SOL" && k !== "USDC" && b[k] > 0; }).map(function (k) { return k + " " + bal(b, k); }).join(", ") : "";
-    h += "<tr><td><b>" + esc(w.name) + '</b><div class="small muted">' + (w.source === "bot" ? "created by the bot" : "from Railway") + "</div></td><td>" + esc(w.role) + "</td><td>" + esc(short(w.address)) + "</td><td>" + bal(b, "SOL") + "</td><td>" + bal(b, "USDC") + "</td><td>" + (esc(other) || "–") + "</td><td>" +
+    h += '<tr><td><input type="checkbox" class="wsel" value="' + esc(w.id) + '"' + (wSel[w.id] ? " checked" : "") + ' onchange="wSel[this.value]=this.checked"' + dis + "></td><td><b>" + esc(w.name) + '</b><div class="small muted">' + (w.source === "bot" ? "created by the bot" : "from Railway") + "</div></td><td>" + esc(w.role) + "</td><td>" + esc(short(w.address)) + "</td><td>" + bal(b, "SOL") + "</td><td>" + bal(b, "USDC") + "</td><td>" + (esc(other) || "–") + "</td><td>" +
       '<input type="text" id="fs_' + esc(w.id) + '" placeholder="SOL" style="width:64px"> <input type="text" id="fu_' + esc(w.id) + '" placeholder="USDC" style="width:70px"> ' +
       '<button class="btn" onclick="walletAct(\'fund\',\'' + esc(w.id) + "')\"" + dis + ">Fund</button> " +
       '<button class="btn" onclick="walletAct(\'sweep\',\'' + esc(w.id) + "')\"" + dis + ">Sweep back</button>" +
       (w.source === "bot" && w.role === "test" ? ' <label class="small muted"><input type="checkbox" id="rm_' + esc(w.id) + '"> delete after sweep</label>' : "") + "</td></tr>";
   });
   h += "</table>";
+  h += '<div class="tsrow"><button class="btn" onclick="sweepSelected()"' + dis + '>Sweep selected back</button>' +
+    '<label class="small muted"><input type="checkbox" id="rm_sel"> delete the selected bot test wallets after the sweep (empties them completely)</label></div>';
   h += '<div class="tsrow"><input type="text" id="nw_name" placeholder="New wallet name" style="width:180px"><select id="nw_role"><option value="test">test wallet</option><option value="trading">trading wallet</option></select>' +
     '<button class="btn gold" onclick="walletAct(\'create\')"' + dis + ">Create wallet</button>" +
     '<label class="small muted"><input type="checkbox" id="w_ok"> funding and sweeps move real funds</label></div>';
@@ -322,6 +343,7 @@ function renderTestSwap() {
     '<label class="small muted"><input type="checkbox" id="ts_ok"> uses real funds</label>' +
     '<button class="btn gold" onclick="runTest()"' + dis + ">" + (tsBusy ? "Running…" : "Run test swap") + "</button></div>";
   if (tsMsg) h += '<div class="' + (tsMsg.indexOf("OK") === 0 ? "warn" : "err") + '">' + esc(tsMsg) + "</div>";
+  if (T.history.length) h += '<div class="tsrow"><button class="btn" onclick="clearTests()"' + (S.canControl && !tsBusy ? "" : " disabled") + '>Clear test swap history</button></div>';
   h += T.history.length ? '<table style="margin-top:10px"><tr><th>When</th><th>Wallet</th><th>Swap</th><th>Result</th><th>Route / quotes</th></tr>' + T.history.map(function (r) {
     var q = (r.quotes || []).map(function (x) { return (x.best ? "<b>" : "") + esc(x.provider) + (x.outAmount == null ? "" : " " + Number(x.outAmount).toPrecision(6)) + (x.best ? "</b>" : ""); }).join("<br>");
     return "<tr><td>" + esc(r.time.slice(5, 16).replace("T", " ")) + "</td><td>" + esc(r.walletName) + "</td><td>$" + esc(r.amountUsd) + " " + esc(r.from) + " → " + esc(r.to) + "</td><td>" +
@@ -329,6 +351,15 @@ function renderTestSwap() {
       '<div class="small muted">' + Math.round(r.durationMs / 100) / 10 + "s" + (r.apiCostUsdc != null ? " · API $" + r.apiCostUsdc : "") + "</div></td><td class=\"small\">" + (q || "–") + "</td></tr>";
   }).join("") + "</table>" : '<div class="muted small" style="margin-top:8px">No test swaps yet.</div>';
   el.innerHTML = h;
+}
+async function clearTests() {
+  if (!confirm("Delete the test swap history from the dashboard? The swaps stay on Solscan.")) return;
+  try {
+    var r = await fetch("/api/test-swap/clear", { method: "POST", headers: { "content-type": "application/json", "x-dashboard": "1" }, body: "{}" });
+    var j = await r.json();
+    tsMsg = r.ok ? "OK: cleared " + j.cleared + " test swap(s)" : (j.error || "failed");
+  } catch (e) { tsMsg = e.message; }
+  await load();
 }
 async function runTest() {
   var p = { walletId: document.getElementById("ts_wallet").value, from: document.getElementById("ts_from").value, to: document.getElementById("ts_to").value, amountUsd: Number(document.getElementById("ts_amt").value) };
