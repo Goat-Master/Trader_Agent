@@ -61,7 +61,11 @@ async function x402Fetch(kp: Keypair) {
     if ((terms.x402Version ?? 1) !== 1) throw new Error(`x402 version ${terms.x402Version} is not supported yet`);
     const header = await pay(req, 1);
     const paid = await fetch(url, { ...init, headers: { ...init.headers, "X-PAYMENT": header } });
-    if (paid.status === 402) throw new Error(`payment rejected: ${(await paid.text()).slice(0, 300)}`);
+    if (paid.status === 402) {
+      const body = await paid.text();
+      if (/simulation_failed|insufficient/i.test(body)) throw new Error("this wallet can't pay the Swap.io API fee: it needs some USDC (a few cents covers the API, plus the amount you swap)");
+      throw new Error(`payment rejected: ${body.slice(0, 300)}`);
+    }
     return paid;
   };
   return Object.assign(fetchPaid, { spent: () => spent });
