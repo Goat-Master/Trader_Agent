@@ -138,18 +138,20 @@ let cache: { at: number; data: any } | null = null;
 export async function walletOverview() {
   if (cache && Date.now() - cache.at < 60_000) return cache.data;
   const status = walletAdminStatus();
-  let treasury: any = null;
+  let treasury: any = null, failed = false;
   if (process.env.TREASURY_SECRET_KEY) {
-    try { const a = (await treasuryKeypair()).publicKey.toBase58(); treasury = { address: a, ...(await balancesOf(a).catch(() => ({}))) }; }
+    try { const a = (await treasuryKeypair()).publicKey.toBase58(); try { treasury = { address: a, ...(await balancesOf(a)) }; } catch (e) { failed = true; treasury = { address: a, balanceError: (e as Error).message.slice(0, 160) }; } }
     catch (e) { treasury = { address: "invalid key", error: (e as Error).message }; }
   }
   const wallets = [];
   for (const w of listWallets()) {
-    try { const a = (await w.getKeypair()).publicKey.toBase58(); wallets.push({ id: w.id, name: w.name, role: w.role, source: w.source, address: a, balances: await balancesOf(a).catch(() => null) }); }
+    try { const a = (await w.getKeypair()).publicKey.toBase58(); let balances = null, balanceError: string | undefined;
+      try { balances = await balancesOf(a); } catch (e) { failed = true; balanceError = (e as Error).message.slice(0, 160); }
+      wallets.push({ id: w.id, name: w.name, role: w.role, source: w.source, address: a, balances, balanceError }); }
     catch { wallets.push({ id: w.id, name: w.name, role: w.role, source: w.source, address: "invalid key", balances: null }); }
   }
   const data = { ...status, treasury, wallets, history: loadTransfers().slice(-15).reverse(), botWallets: keystoreReady() ? storedWallets().length : 0 };
-  cache = { at: Date.now(), data };
+  cache = { at: failed ? Date.now() - 45_000 : Date.now(), data }; // a failed lookup is retried after 15 seconds, a good one after 60
   return data;
 }
 export const clearWalletCache = () => { cache = null; };

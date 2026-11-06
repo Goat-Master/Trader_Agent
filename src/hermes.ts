@@ -91,13 +91,13 @@ function findTx(o: any, depth = 0): string | null {
 const KNOWN: [RegExp, string, boolean, boolean?][] = [
   [/0x1771|6001|SlippageToleranceExceeded|slippage/i, "price moved past the slippage limit (stale quote)", true],
   [/BlockhashNotFound|Blockhash not found|block height exceeded/i, "quote expired before it was sent", true],
-  [/insufficient lamports|0x1\b|insufficient funds/i, "not enough balance: check the token being sold, plus about 0.01 SOL for fees and new token accounts", false, true],
+  [/insufficient lamports|0x1\b|insufficient funds|InsufficientFundsForFee|prior credit/i, "not enough balance: check the token being sold, plus about 0.01 SOL for fees and new token accounts", false, true],
   [/AccountNotFound|could not find account/i, "a token account is missing in the wallet (it needs a little SOL to create one)", false],
 ];
 async function simulationReason(e: any, conn: any): Promise<{ text: string; retry: boolean; balance?: boolean }> {
   let logs: string[] = e?.logs ?? [];
   if (!logs.length && typeof e?.getLogs === "function") { try { logs = await e.getLogs(conn); } catch {} }
-  const all = `${e?.message ?? e} ${logs.join(" ")}`;
+  const all = `${e?.message ?? e} ${e?.transactionError?.message ?? ""} ${JSON.stringify(e?.transactionError ?? "")} ${logs.join(" ")}`;
   for (const [re, text, retry, balance] of KNOWN) if (re.test(all)) return { text, retry, balance };
   const errLines = logs.filter((l) => /failed|error|Error/.test(l)).slice(-3);
   return { text: (errLines.length ? errLines.join(" | ") : String(e?.message ?? e)).slice(0, 400), retry: false };
@@ -128,7 +128,7 @@ export async function hermesSwap(kp: Keypair, from: string, to: string, amountIn
   // Quote, build, sign, send. A failed simulation means nothing was sent, so a stale quote is retried once with a fresh one.
   // A failed simulation means nothing was sent, so it is safe to try again:
   //   stale quote  -> fresh quote, once
-  //   route error  -> next provider from the same quote, up to 3 providers
+  //   route error  -> next provider, from a fresh quote, up to 3 providers
   let quotes: HermesQuote[] = [], best!: HermesQuote, signature = "";
   const tried = new Set<string>();
   let requote = true, requotes = 0;
@@ -180,11 +180,17 @@ export async function hermesSwap(kp: Keypair, from: string, to: string, amountIn
       break;
     } catch (e) {
       if (signature) throw e; // it was sent: never retry
-      const why = await simulationReason(e, conn);
+      let why = await simulationReason(e, conn);
+      // Empty logs = rejected before any program ran: almost always no SOL to pay the network fee
+      if (!why.balance && !((e as any)?.logs?.length)) {
+        const lamports = await conn.getBalance(kp.publicKey).catch(() => null);
+        if (lamports != null && lamports < 5_000_000) why = { text: `the wallet has ${(lamports / 1e9).toFixed(4)} SOL: it needs about 0.01 SOL for network fees and new token accounts`, retry: false, balance: true };
+      }
       log("hermes.simulation_failed", { attempt, provider: best.provider.key, why: why.text });
       if (why.balance) throw new Error(`swap not sent: ${why.text}`);
       if (why.retry && requotes < 1) { requotes++; requote = true; tried.clear(); continue; }
       tried.add(best.provider.key);
+      requote = true; // quotes are short-lived (Swap.io docs): every new attempt starts from a fresh quote
       if (tried.size >= 3 || attempt === 4) throw new Error(`swap not sent (simulation failed on ${[...tried].join(", ")}): ${why.text}`);
     }
   }

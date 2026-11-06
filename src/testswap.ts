@@ -27,7 +27,6 @@ export const testSwapStatus = () => ({
 });
 
 let busy = false;
-let lastRun = 0;
 
 export async function runTestSwap(p: { walletId: string; from: string; to: string; amountUsd: number }): Promise<TestSwapRecord> {
   if (process.env.ALLOW_TEST_SWAPS !== "yes") throw new Error("test swaps are locked: set ALLOW_TEST_SWAPS=yes in Railway");
@@ -35,8 +34,7 @@ export async function runTestSwap(p: { walletId: string; from: string; to: strin
   if (!(p.from in TOKENS) || !(p.to in TOKENS) || p.from === p.to) throw new Error("pick two different whitelisted tokens");
   if (!Number.isFinite(p.amountUsd) || p.amountUsd <= 0 || p.amountUsd > CONFIG.testSwapMaxUsd) throw new Error(`amount must be between $0 and $${CONFIG.testSwapMaxUsd}`);
   if (busy) throw new Error("a test swap is already running");
-  if (Date.now() - lastRun < 30_000) throw new Error("wait 30 seconds between test swaps");
-  busy = true; lastRun = Date.now();
+  busy = true;
   const w = listWallets().find((x) => x.id === p.walletId);
   const started = Date.now();
   const rec: TestSwapRecord = { time: new Date().toISOString(), wallet: p.walletId, walletName: w?.name ?? p.walletId, from: p.from, to: p.to, amountUsd: p.amountUsd, status: "failed", durationMs: 0 };
