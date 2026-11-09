@@ -23,7 +23,7 @@ export function walletAdminStatus() {
 const assertEnabled = () => { const s = walletAdminStatus(); if (!s.enabled) throw new Error(`wallet admin is locked, missing: ${s.missing.join(", ")}`); if (CONFIG.killSwitch) throw new Error("KILL_SWITCH is on"); };
 
 // ---------- history ----------
-export type TransferRecord = { time: string; kind: "create" | "fund" | "sweep"; wallet: string; walletName: string; sol?: number; usdc?: number; signature?: string; status: "ok" | "failed"; error?: string };
+export type TransferRecord = { time: string; kind: "create" | "fund" | "sweep" | "delete"; wallet: string; walletName: string; sol?: number; usdc?: number; signature?: string; status: "ok" | "failed"; error?: string };
 const histFile = () => join(CONFIG.dataDir, "transfers.json");
 export const loadTransfers = (): TransferRecord[] => readJson<TransferRecord[]>(histFile(), []);
 function record(r: TransferRecord) {
@@ -86,31 +86,24 @@ export async function sweepWallet(id: string, remove = false) {
   if (!w) throw new Error(`unknown wallet ${id}`);
   const c = loadControls();
   if (w.role === "trading" && c.trader.enabled && c.trader.mode === "live") throw new Error("the trading agent is live: switch it off or to Paper before sweeping its wallet");
+  if (remove && w.source !== "bot") throw new Error("this wallet was added in Railway: sweep it, then remove its TEST_WALLET variable in Railway to delete it");
   return exclusive(async () => {
-    const rec: TransferRecord = { time: new Date().toISOString(), kind: "sweep", wallet: id, walletName: w.name, status: "failed" };
+    const rec: TransferRecord = { time: new Date().toISOString(), kind: remove ? "delete" : "sweep", wallet: id, walletName: w.name, status: "failed" };
     try {
       const kp = await keypairFor(id);
       const treasury = (await treasuryKeypair()).publicKey;
       const b = await balancesOf(kp.publicKey.toBase58());
       const others = Object.entries(b).filter(([s, v]) => s !== "SOL" && s !== "USDC" && v > 0).map(([s]) => s);
       if (others.length) throw new Error(`swap ${others.join(", ")} back to USDC first (test swap panel), then sweep`);
-      if (remove && w.source === "bot") {
-        // Deleting: empty the wallet completely (all USDC, close its token accounts, all SOL) so nothing is stranded
-        const r = await closeOut(kp, treasury);
-        rec.usdc = r.usdc; rec.sol = r.sol; rec.signature = r.signature;
-        rec.status = "ok";
-        removeWallet(id);
-      } else {
-        const sol = Math.max(0, Math.floor((b.SOL - 0.003) * 1e9) / 1e9); // leave enough for this transaction's fee and the token account rent refund
-        rec.usdc = b.USDC; rec.sol = sol;
-        if (b.USDC <= 0 && sol <= 0) throw new Error("nothing to sweep");
-        rec.signature = await send(kp, treasury, sol, b.USDC);
-        rec.status = "ok";
-      }
+      // Always empty the wallet completely: all USDC, its token accounts closed (rent back to the treasury), all SOL minus the fee
+      const r = await closeOut(kp, treasury, remove);
+      rec.usdc = r.usdc; rec.sol = r.sol; rec.signature = r.signature;
+      rec.status = "ok";
+      if (remove) removeWallet(id);
     } catch (e) { rec.error = (e as Error).message.slice(0, 300); }
     record(rec);
     if (rec.status !== "ok") throw new Error(rec.error);
-    return rec;
+    return { ...rec, removed: remove };
   });
 }
 
@@ -122,8 +115,10 @@ export async function sweepMany(ids: string[], remove = false) {
   for (const id of [...new Set(ids.map(String))]) {
     const name = listWallets().find((x) => x.id === id)?.name ?? id;
     try {
-      const r = await sweepWallet(id, remove);
-      results.push({ id, name, status: "ok", signature: r.signature, removed: remove && !listWallets().some((x) => x.id === id) });
+      const w = listWallets().find((x) => x.id === id);
+      const del = remove && w?.source === "bot";
+      const r = await sweepWallet(id, del);
+      results.push({ id, name, status: "ok", signature: r.signature, removed: del, ...(remove && !del ? { error: "swept; added in Railway, so remove its variable there to delete it" } : {}) });
     } catch (e) { results.push({ id, name, status: "failed", error: (e as Error).message.slice(0, 200) }); }
   }
   return { results, ok: results.filter((r) => r.status === "ok").length, failed: results.filter((r) => r.status === "failed").length };
@@ -131,7 +126,7 @@ export async function sweepMany(ids: string[], remove = false) {
 
 // Empty a wallet completely before deleting it: send all USDC, close every token account (their rent goes
 // to the treasury too) and send all SOL minus the fee. Leaves 0 SOL, so the wallet can be forgotten safely.
-async function closeOut(from: import("@solana/web3.js").Keypair, to: import("@solana/web3.js").PublicKey) {
+async function closeOut(from: import("@solana/web3.js").Keypair, to: import("@solana/web3.js").PublicKey, deleting = false) {
   const web3 = await import("@solana/web3.js");
   const spl = await import("@solana/spl-token");
   const conn = new web3.Connection(CONFIG.solanaRpc, "confirmed");
@@ -154,9 +149,14 @@ async function closeOut(from: import("@solana/web3.js").Keypair, to: import("@so
   const lamports = await conn.getBalance(from.publicKey);
   const rent = needsDstAta ? await conn.getMinimumBalanceForRentExemption(165) : 0;
   const solOut = lamports - 5000 - rent;
+  if (solOut < 0 && needsDstAta) throw new Error("not enough SOL to open the treasury's USDC account: send the treasury a little USDC first");
   if (solOut > 0) tx.add(web3.SystemProgram.transfer({ fromPubkey: from.publicKey, toPubkey: to, lamports: solOut }));
   if (!tx.instructions.length) return { signature: undefined, sol: 0, usdc: 0 }; // already empty: nothing to move
-  if (lamports < 5000) throw new Error("the wallet has no SOL to pay the fee for emptying it: send it 0.001 SOL first");
+  if (lamports < 5000) {
+    // Not even enough SOL for a fee. Only empty token accounts can be left: nothing of value, so deleting is fine.
+    if (deleting && usdcAtoms === 0n) return { signature: undefined, sol: 0, usdc: 0 };
+    throw new Error("the wallet has no SOL to pay the network fee: send it 0.001 SOL first");
+  }
   const signature = await web3.sendAndConfirmTransaction(conn, tx, [from], { commitment: "confirmed" });
   return { signature, sol: Math.max(0, solOut) / 1e9, usdc: Number(usdcAtoms) / 1e6 };
 }
