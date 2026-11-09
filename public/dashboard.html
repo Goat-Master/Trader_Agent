@@ -245,19 +245,17 @@ async function restoreBackup() {
 
 var wBusy = false, wMsg = "", wSel = {};
 function selAll(on) { (S.walletAdmin && S.walletAdmin.wallets || []).forEach(function (w) { wSel[w.id] = on; }); renderWallets(); }
-async function sweepSelected() {
+async function sweepSelected(remove) {
   var ids = Object.keys(wSel).filter(function (k) { return wSel[k]; });
   if (!ids.length) { wMsg = "Select at least one wallet"; renderWallets(); return; }
-  if (!document.getElementById("w_ok").checked) { wMsg = "Tick 'funding and sweeps move real funds' to confirm"; renderWallets(); return; }
-  var remove = document.getElementById("rm_sel").checked;
-  if (remove && !confirm("Sweep " + ids.length + " wallet(s) back to the treasury and delete the bot test wallets among them? Deleted wallets cannot be recovered.")) return;
+  if (remove && !confirm("Empty " + ids.length + " wallet(s) into the treasury and delete them? Wallets added in Railway are only swept.")) return;
   wBusy = true; wMsg = "Sweeping " + ids.length + " wallet(s), one at a time..."; renderWallets();
   try {
     var r = await fetch("/api/wallets/sweep-many", { method: "POST", headers: { "content-type": "application/json", "x-dashboard": "1" }, body: JSON.stringify({ ids: ids, remove: remove }) });
     var j = await r.json();
     if (!r.ok) wMsg = j.error || "failed";
     else {
-      wMsg = (j.failed ? "" : "OK: ") + j.ok + " swept, " + j.failed + " failed. " + j.results.map(function (x) { return x.name + ": " + (x.status === "ok" ? (x.removed ? "swept and deleted" : "swept") : x.error); }).join(" | ");
+      wMsg = (j.failed ? "" : "OK: ") + j.ok + " swept, " + j.failed + " failed. " + j.results.map(function (x) { return x.name + ": " + (x.status === "ok" ? (x.removed ? "swept and deleted" : "swept" + (x.error ? " (" + x.error + ")" : "")) : x.error); }).join(" | ");
       j.results.forEach(function (x) { if (x.status === "ok") delete wSel[x.id]; });
     }
   } catch (e) { wMsg = e.message; }
@@ -281,14 +279,14 @@ function renderWallets() {
       '<input type="text" id="fs_' + esc(w.id) + '" placeholder="SOL" style="width:64px"> <input type="text" id="fu_' + esc(w.id) + '" placeholder="USDC" style="width:70px"> ' +
       '<button class="btn" onclick="walletAct(\'fund\',\'' + esc(w.id) + "')\"" + dis + ">Fund</button> " +
       '<button class="btn" onclick="walletAct(\'sweep\',\'' + esc(w.id) + "')\"" + dis + ">Sweep back</button>" +
-      (w.source === "bot" && w.role === "test" ? ' <label class="small muted"><input type="checkbox" id="rm_' + esc(w.id) + '"> delete after sweep</label>' : "") + "</td></tr>";
+      (w.source === "bot" ? ' <button class="btn" onclick="walletAct(\'delete\',\'' + esc(w.id) + "')\"" + dis + ">Delete</button>" : "") + "</td></tr>";
   });
   h += "</table>";
-  h += '<div class="tsrow"><button class="btn" onclick="sweepSelected()"' + dis + '>Sweep selected back</button>' +
-    '<label class="small muted"><input type="checkbox" id="rm_sel"> delete the selected bot test wallets after the sweep (empties them completely)</label></div>';
+  h += '<div class="tsrow"><button class="btn" onclick="sweepSelected(false)"' + dis + '>Sweep selected back</button>' +
+    '<button class="btn" onclick="sweepSelected(true)"' + dis + '>Sweep and delete selected</button>' +
+    '<span class="small muted">Sweeps move everything (all USDC and all SOL minus the network fee) to the treasury.</span></div>';
   h += '<div class="tsrow"><input type="text" id="nw_name" placeholder="New wallet name" style="width:180px"><select id="nw_role"><option value="test">test wallet</option><option value="trading">trading wallet</option></select>' +
-    '<button class="btn gold" onclick="walletAct(\'create\')"' + dis + ">Create wallet</button>" +
-    '<label class="small muted"><input type="checkbox" id="w_ok"> funding and sweeps move real funds</label></div>';
+    '<button class="btn gold" onclick="walletAct(\'create\')"' + dis + ">Create wallet</button></div>";
   if (wMsg) h += '<div class="' + (wMsg.indexOf("OK") === 0 ? "warn" : "err") + '">' + esc(wMsg) + "</div>";
   if ((W.history || []).length) h += '<table style="margin-top:8px"><tr><th>When</th><th>Action</th><th>Wallet</th><th>Amount</th><th>Result</th></tr>' + W.history.map(function (r) {
     return "<tr><td>" + esc(r.time.slice(5, 16).replace("T", " ")) + "</td><td>" + esc(r.kind) + "</td><td>" + esc(r.walletName) + "</td><td>" + (r.sol ? esc(r.sol) + " SOL " : "") + (r.usdc ? esc(r.usdc) + " USDC" : "") + "</td><td>" +
@@ -300,10 +298,9 @@ async function walletAct(action, id) {
   var body = {};
   if (action === "create") body = { name: document.getElementById("nw_name").value, role: document.getElementById("nw_role").value };
   else {
-    if (!document.getElementById("w_ok").checked) { wMsg = "Tick 'funding and sweeps move real funds' to confirm"; renderWallets(); return; }
     body.id = id;
     if (action === "fund") { body.sol = Number(document.getElementById("fs_" + id).value || 0); body.usdc = Number(document.getElementById("fu_" + id).value || 0); }
-    if (action === "sweep") { var rm = document.getElementById("rm_" + id); body.remove = !!(rm && rm.checked); }
+    if (action === "delete") { if (!confirm("Empty this wallet into the treasury and delete it?")) return; action = "sweep"; body.remove = true; }
   }
   wBusy = true; wMsg = ""; renderWallets();
   try {
@@ -340,8 +337,7 @@ function renderTestSwap() {
   h += '<div class="tsrow"><select id="ts_wallet">' + opts(T.wallets, keep.walletId, function (w) { return w.name + " (" + String(w.address).slice(0, 4) + "…" + String(w.address).slice(-4) + ")"; }) + "</select>" +
     '<select id="ts_from">' + opts(T.tokens, keep.from) + '</select><span class="muted">to</span><select id="ts_to">' + opts(T.tokens, keep.to) + "</select>" +
     '<span class="muted">$</span><input type="text" id="ts_amt" value="' + esc(keep.amountUsd) + '" style="width:70px">' +
-    '<label class="small muted"><input type="checkbox" id="ts_ok"> uses real funds</label>' +
-    '<button class="btn gold" onclick="runTest()"' + dis + ">" + (tsBusy ? "Running…" : "Run test swap") + "</button></div>";
+        '<button class="btn gold" onclick="runTest()"' + dis + ">" + (tsBusy ? "Running…" : "Run test swap") + "</button></div>";
   if (tsMsg) h += '<div class="' + (tsMsg.indexOf("OK") === 0 ? "warn" : "err") + '">' + esc(tsMsg) + "</div>";
   if (T.history.length) h += '<div class="tsrow"><button class="btn" onclick="clearTests()"' + (S.canControl && !tsBusy ? "" : " disabled") + '>Clear test swap history</button></div>';
   h += T.history.length ? '<table style="margin-top:10px"><tr><th>When</th><th>Wallet</th><th>Swap</th><th>Result</th><th>Route / quotes</th></tr>' + T.history.map(function (r) {
@@ -364,7 +360,6 @@ async function clearTests() {
 async function runTest() {
   var p = { walletId: document.getElementById("ts_wallet").value, from: document.getElementById("ts_from").value, to: document.getElementById("ts_to").value, amountUsd: Number(document.getElementById("ts_amt").value) };
   tsForm = p;
-  if (!document.getElementById("ts_ok").checked) { tsMsg = "Tick 'uses real funds' to confirm"; renderTestSwap(); return; }
   tsBusy = true; tsMsg = ""; renderTestSwap();
   try {
     var r = await fetch("/api/test-swap", { method: "POST", headers: { "content-type": "application/json", "x-dashboard": "1" }, body: JSON.stringify(p) });
